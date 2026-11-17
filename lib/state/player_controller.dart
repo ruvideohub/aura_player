@@ -39,8 +39,10 @@ class PlayerController extends ChangeNotifier {
           notifyListeners();
         }),
         backend.playingStream.listen((v) {
+          final was = _playing;
           _playing = v;
           notifyListeners();
+          if (was && !v) _maybeResumeMusicAfterSystemPause();
         }),
         backend.bufferingStream.listen((v) {
           _buffering = v;
@@ -67,8 +69,10 @@ class PlayerController extends ChangeNotifier {
       _androidBackend = null;
       _subs = [
         player.stream.playing.listen((v) {
+          final was = _playing;
           _playing = v;
           notifyListeners();
+          if (was && !v) _maybeResumeMusicAfterSystemPause();
         }),
         player.stream.position.listen(_onPosition),
         player.stream.duration.listen((d) {
@@ -251,6 +255,37 @@ class PlayerController extends ChangeNotifier {
       }
       return video;
     }
+  }
+
+  // Фон — только для музыки: если система поставила паузу пока в бэкграунде — вернуть
+  bool _inBackground = false;
+  bool _wasPlayingMusicBeforeBg = false;
+  void setBackground(bool bg) {
+    _inBackground = bg;
+    if (bg) {
+      _wasPlayingMusicBeforeBg = isPlaying && current != null && !current!.isVideo;
+      if (_wasPlayingMusicBeforeBg) {
+        Future.delayed(const Duration(milliseconds: 320), () async {
+          if (_inBackground && _wasPlayingMusicBeforeBg && !_playing && current != null && !current!.isVideo) {
+            try { await _backendPlay(); } catch (_) {}
+          }
+        });
+      }
+    } else {
+      _wasPlayingMusicBeforeBg = false;
+    }
+  }
+  void _maybeResumeMusicAfterSystemPause() {
+    if (!_inBackground) return;
+    if (!_wasPlayingMusicBeforeBg) return;
+    final c = current;
+    if (c == null || c.isVideo) return;
+    if (_duration > Duration.zero && _position >= _duration - const Duration(seconds: 1)) return;
+    Future.delayed(const Duration(milliseconds: 180), () async {
+      if (_inBackground && _wasPlayingMusicBeforeBg && !_playing && current?.isVideo == false) {
+        try { await _backendPlay(); } catch (_) {}
+      }
+    });
   }
 
   // Таймер сна

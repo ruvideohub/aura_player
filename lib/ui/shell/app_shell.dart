@@ -159,23 +159,14 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
     super.didChangeAppLifecycleState(state);
     final player = ref.read(playerProvider);
     if (state == AppLifecycleState.paused) {
-      // если видео играет и не в PiP — ставим на паузу? требование: фон только для музыки, видео можно оставить но не фонить
-      // оставим видео на паузу чтобы не жрать батарею, если пользователь не в PiP
-      if (player.hasVideo && player.isPlaying && !_inPip) {
-        // не паузим автоматически — даём шанс авто-PiP через onUserLeaveHint (уже сработал)
-        // если через 500мс не в PiP — пауза
-        Future.delayed(const Duration(milliseconds: 700), () async {
-          if (!_inPip && player.hasVideo && player.isPlaying && mounted) {
-            // не паузим резко — пусть решает пользователь, просто не стартуем сервис
-          }
-        });
+      player.setBackground(true);
+      if (player.current?.isVideo == false && player.isPlaying) {
+        _syncNotification();
       }
-      // музыка — ничего не делаем, сервис уже держит
     } else if (state == AppLifecycleState.resumed) {
+      player.setBackground(false);
       _syncNotification();
-    } else if (state == AppLifecycleState.inactive) {
-      // на iOS — пауза видео, но у нас Android
-    }
+    } else if (state == AppLifecycleState.inactive) {}
   }
 
   Future<void> _ensureAndroidPermissionsAndScan() async {
