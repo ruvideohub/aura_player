@@ -192,12 +192,30 @@ class _VideoPageState extends ConsumerState<VideoPage> {
               child: player.buildVideoView(),
             ),
           ),
-          // Жесты — прозрачный, на весь экран, под контролами
+          // Жесты — прозрачный слой на весь экран (под контролами).
+          // Тап центр — показать/скрыть, двойной тап — фуллскрин / перемотка, свайпы —
+          // горизонталь = перемотка, вертикаль слева = яркость, справа = громкость.
           LayoutBuilder(builder: (context, constraints) {
             return Positioned.fill(
               child: GestureDetector(
                 behavior: HitTestBehavior.translucent,
                 onTap: () => _toggleControls(player),
+                onDoubleTapDown: (d) {
+                  final w = constraints.maxWidth;
+                  final x = d.localPosition.dx;
+                  if (x < w * 0.35) {
+                    // Левый край — назад 10с
+                    player.seek(player.position - const Duration(seconds: 10));
+                    _showControls(player);
+                  } else if (x > w * 0.65) {
+                    // Правый край — вперёд 10с
+                    player.seek(player.position + const Duration(seconds: 10));
+                    _showControls(player);
+                  } else {
+                    _toggleFullscreen();
+                  }
+                },
+                // Дубль-тап оставляем и на onDoubleTap для надёжности (центр)
                 onDoubleTap: _toggleFullscreen,
                 onHorizontalDragUpdate: (d) {
                   final delta = Duration(milliseconds: (d.delta.dx * 90).round());
@@ -348,15 +366,19 @@ class _VideoPageState extends ConsumerState<VideoPage> {
 
   Widget _topBar(BuildContext context, PlayerController player, MediaTrack t) {
     final isAndroid = player.isAndroid;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.70), Colors.black.withOpacity(0.15), Colors.transparent])),
-      child: Row(children: [
-        Expanded(child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white))),
-        _speedMenu(context, player),
-        if (!isAndroid) ...[IconButton(tooltip: 'Аудиодорожка', icon: const Icon(Icons.audiotrack_rounded, color: Colors.white), onPressed: () => _audioTrackMenu(context, player)), IconButton(tooltip: 'Субтитры', icon: const Icon(Icons.subtitles_outlined, color: Colors.white), onPressed: () => _subtitleMenu(context, player))] else Tooltip(message: 'Дорожки/субтитры — позже', child: IconButton(icon: const Icon(Icons.subtitles_outlined, color: Colors.white38), onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Дорожки скоро на Media3'))))),
-        IconButton(tooltip: 'Полный экран', icon: Icon(ref.watch(fullscreenProvider) ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded, color: Colors.white), onPressed: _toggleFullscreen),
-      ]),
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => _toggleControls(player),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.70), Colors.black.withOpacity(0.15), Colors.transparent])),
+        child: Row(children: [
+          Expanded(child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white))),
+          _speedMenu(context, player),
+          if (!isAndroid) ...[IconButton(tooltip: 'Аудиодорожка', icon: const Icon(Icons.audiotrack_rounded, color: Colors.white), onPressed: () => _audioTrackMenu(context, player)), IconButton(tooltip: 'Субтитры', icon: const Icon(Icons.subtitles_outlined, color: Colors.white), onPressed: () => _subtitleMenu(context, player))] else Tooltip(message: 'Дорожки/субтитры — позже', child: IconButton(icon: const Icon(Icons.subtitles_outlined, color: Colors.white38), onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Дорожки скоро на Media3'))))),
+          IconButton(tooltip: 'Полный экран', icon: Icon(ref.watch(fullscreenProvider) ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded, color: Colors.white), onPressed: _toggleFullscreen),
+        ]),
+      ),
     );
   }
 
@@ -380,18 +402,22 @@ class _VideoPageState extends ConsumerState<VideoPage> {
 
   Widget _bottomBar(BuildContext context, PlayerController player) {
     final theme = Theme.of(context);
-    return Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Colors.black.withOpacity(0.70), Colors.black.withOpacity(0.20), Colors.transparent])), child: Column(children: [
-      SeekBar(position: player.position, duration: player.duration, onSeek: (d) { player.seek(d); _showControls(player); }, compact: true), const SizedBox(height:2),
-      Row(children: [
-        IconButton(tooltip:'Предыдущий', onPressed: () { player.prev(); _showControls(player); }, icon: const Icon(Icons.skip_previous_rounded, color: Colors.white)),
-        GestureDetector(onTap: () { player.togglePlay(); _showControls(player); }, child: Container(width:52, height:52, decoration: BoxDecoration(color: theme.colorScheme.primary, shape: BoxShape.circle), child: Icon(player.isPlaying?Icons.pause_rounded:Icons.play_arrow_rounded, color: Colors.black, size:30))),
-        IconButton(tooltip:'Следующий', onPressed: () { player.next(manual:true); _showControls(player); }, icon: const Icon(Icons.skip_next_rounded, color: Colors.white)),
-        const SizedBox(width:4),
-        IconButton(tooltip:'Без звука', onPressed: () { player.toggleMute(); _showControls(player); }, icon: Icon(player.muted||player.volume==0?Icons.volume_off_rounded:Icons.volume_up_rounded, color: Colors.white, size:20)),
-        SizedBox(width:110, child: SliderTheme(data: SliderTheme.of(context).copyWith(trackHeight:3, thumbShape: const RoundSliderThumbShape(enabledThumbRadius:6), overlayShape: const RoundSliderOverlayShape(overlayRadius:10)), child: Slider(value: player.volume.clamp(0,100), max:100, onChanged: (v) { player.setVolume(v); _showControls(player); }, activeColor: theme.colorScheme.primary, inactiveColor: Colors.white24))),
-        const Spacer(),
-        IconButton(tooltip:'Полный экран', onPressed: _toggleFullscreen, icon: Icon(ref.watch(fullscreenProvider)?Icons.fullscreen_exit_rounded:Icons.fullscreen_rounded, color: Colors.white)),
-      ]),
-    ]));
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => _toggleControls(player),
+      child: Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Colors.black.withOpacity(0.70), Colors.black.withOpacity(0.20), Colors.transparent])), child: Column(children: [
+        SeekBar(position: player.position, duration: player.duration, onSeek: (d) { player.seek(d); _showControls(player); }, compact: true), const SizedBox(height:2),
+        Row(children: [
+          IconButton(tooltip:'Предыдущий', onPressed: () { player.prev(); _showControls(player); }, icon: const Icon(Icons.skip_previous_rounded, color: Colors.white)),
+          GestureDetector(onTap: () { player.togglePlay(); _showControls(player); }, child: Container(width:52, height:52, decoration: BoxDecoration(color: theme.colorScheme.primary, shape: BoxShape.circle), child: Icon(player.isPlaying?Icons.pause_rounded:Icons.play_arrow_rounded, color: Colors.black, size:30))),
+          IconButton(tooltip:'Следующий', onPressed: () { player.next(manual:true); _showControls(player); }, icon: const Icon(Icons.skip_next_rounded, color: Colors.white)),
+          const SizedBox(width:4),
+          IconButton(tooltip:'Без звука', onPressed: () { player.toggleMute(); _showControls(player); }, icon: Icon(player.muted||player.volume==0?Icons.volume_off_rounded:Icons.volume_up_rounded, color: Colors.white, size:20)),
+          SizedBox(width:110, child: SliderTheme(data: SliderTheme.of(context).copyWith(trackHeight:3, thumbShape: const RoundSliderThumbShape(enabledThumbRadius:6), overlayShape: const RoundSliderOverlayShape(overlayRadius:10)), child: Slider(value: player.volume.clamp(0,100), max:100, onChanged: (v) { player.setVolume(v); _showControls(player); }, activeColor: theme.colorScheme.primary, inactiveColor: Colors.white24))),
+          const Spacer(),
+          IconButton(tooltip:'Полный экран', onPressed: _toggleFullscreen, icon: Icon(ref.watch(fullscreenProvider)?Icons.fullscreen_exit_rounded:Icons.fullscreen_rounded, color: Colors.white)),
+        ]),
+      ])),
+    );
   }
 }
