@@ -26,6 +26,8 @@ String _ext(String p) {
   return i < 0 ? '' : c.substring(i + 1).toLowerCase();
 }
 
+String extOf(String p) => _ext(p);
+
 bool isAudioPath(String p) => audioExtensions.contains(_ext(p));
 bool isVideoPath(String p) => videoExtensions.contains(_ext(p)) || streamExtensions.contains(_ext(p));
 bool isStreamUrl(String p) => p.startsWith('http://') || p.startsWith('https://') || p.startsWith('rtmp://') || p.startsWith('rtsp://');

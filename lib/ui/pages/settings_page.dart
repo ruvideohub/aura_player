@@ -339,7 +339,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             Center(child: Text('Сделано с ♥ для меломанов • 2025 bytebudda', style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withOpacity(0.4)))),
             const SizedBox(height: 8),
             ])),
-        ),
       ],
     );
   }

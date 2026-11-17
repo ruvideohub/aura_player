@@ -128,7 +128,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     );
     if (url == null || url.trim().isEmpty) return;
     final u = url.trim();
-    if (!isStreamUrl(u) && !streamExtensions.contains(_ext(u)) && !u.contains('.m3u8') && !u.contains('.mpd')) {
+    if (!isStreamUrl(u) && !streamExtensions.contains(extOf(u)) && !u.contains('.m3u8') && !u.contains('.mpd')) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Вставь http(s) ссылку на поток')));
       return;
     }
