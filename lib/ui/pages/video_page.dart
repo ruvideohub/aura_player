@@ -57,7 +57,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     final x = d.localPosition.dx;
     // Запоминаем стартовые значения
     try { _startBrightness = await ScreenBrightness().current; } catch (_) { _startBrightness = 0.5; }
-    try { _startVolume = await VolumeController.instance.getVolume(); } catch (_) { _startVolume = 0.5; }
+    try { _startVolume = await VolumeController().getVolume(); } catch (_) { _startVolume = 0.5; }
     // x в левой трети — яркость, правой — громкость
     // центр — ничего
   }
@@ -83,7 +83,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
       await player.setVolume(v * 100);
       _showOverlay(volume: v);
       // Также системную громкость пытаемся
-      try { await VolumeController.instance.setVolume(v); } catch (_) {}
+      try { VolumeController().setVolume(v); } catch (_) {}
     }
   }
 
