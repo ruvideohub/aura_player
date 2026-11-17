@@ -22,6 +22,7 @@ class SettingsController extends ChangeNotifier {
   bool eqEnabled = true;
   String eqPresetKey = 'flat';
   List<double> eqGains = List.filled(10, 0.0);
+  int bassBoost = 0; // 0..1000, 0=выкл, 500=50% — системный BassBoost
   List<String> scanDirs = [];
   bool restorePositions = true;
 
@@ -51,6 +52,7 @@ class SettingsController extends ChangeNotifier {
           .toList();
       if (g != null && g.length == 10) eqGains = g;
       scanDirs = (j['scanDirs'] as List?)?.cast<String>().toList() ?? [];
+      bassBoost = (j['bassBoost'] as int?) ?? 0;
       restorePositions = j['restorePositions'] as bool? ?? true;
     } catch (_) {
       // битые настройки — используем значения по умолчанию
@@ -69,6 +71,7 @@ class SettingsController extends ChangeNotifier {
         'eqPresetKey': eqPresetKey,
         'eqGains': eqGains,
         'scanDirs': scanDirs,
+        'bassBoost': bassBoost,
         'restorePositions': restorePositions,
       }));
     } catch (_) {}
@@ -120,6 +123,12 @@ class SettingsController extends ChangeNotifier {
 
   void applyPreset(EqPreset p) {
     setEqGains(p.gains, presetKey: p.key);
+  }
+
+  void setBassBoost(int v) {
+    bassBoost = v.clamp(0, 1000);
+    _save();
+    notifyListeners();
   }
 
   void addScanDir(String dir) {

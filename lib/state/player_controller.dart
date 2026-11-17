@@ -93,6 +93,30 @@ class PlayerController extends ChangeNotifier {
         }),
       ];
     }
+    // Восстановление очереди после загрузки библиотеки
+    Future.microtask(() => _restoreQueue());
+  }
+
+  Future<void> _persistQueue() async {
+    try {
+      await _library.saveQueue(queue, index, shuffle, repeat.name);
+    } catch (_) {}
+  }
+
+  Future<void> _restoreQueue() async {
+    if (_queueRestored) return;
+    _queueRestored = true;
+    try {
+      final data = await _library.loadQueue();
+      if (data == null) return;
+      final q = (data['queue'] as List?)?.map((e) => MediaTrack.fromJson(Map<String, dynamic>.from(e as Map))).toList() ?? [];
+      if (q.isEmpty) return;
+      queue = q;
+      index = (data['index'] as int?)?.clamp(0, q.length - 1) ?? 0;
+      shuffle = data['shuffle'] as bool? ?? false;
+      repeat = RepeatMode.values.firstWhere((e) => e.name == (data['repeat'] as String?), orElse: () => RepeatMode.off);
+      notifyListeners();
+    } catch (_) {}
   }
 
   final Ref _ref;
@@ -109,6 +133,7 @@ class PlayerController extends ChangeNotifier {
   vp.VideoPlayerController? get androidVideoController => _androidBackend?.controller;
 
   List<StreamSubscription<dynamic>> _subs = [];
+  bool _queueRestored = false;
 
   LibraryController get _library => _ref.read(libraryProvider);
   SettingsController get _settings => _ref.read(settingsProvider);
@@ -220,6 +245,7 @@ class PlayerController extends ChangeNotifier {
     queue = List.of(tracks);
     index = startIndex.clamp(0, tracks.length - 1);
     _history.clear();
+    _persistQueue();
     await _playCurrent();
   }
 
@@ -227,6 +253,7 @@ class PlayerController extends ChangeNotifier {
     if (i < 0 || i >= queue.length) return;
     _saveCurrentPosition();
     index = i;
+    _persistQueue();
     await _playCurrent();
   }
 
@@ -279,6 +306,7 @@ class PlayerController extends ChangeNotifier {
 
   void enqueue(List<MediaTrack> tracks) {
     queue = [...queue, ...tracks];
+    _persistQueue();
     notifyListeners();
   }
 
@@ -286,6 +314,7 @@ class PlayerController extends ChangeNotifier {
     if (i < 0 || i >= queue.length || i == index) return;
     queue.removeAt(i);
     if (i < index) index--;
+    _persistQueue();
     notifyListeners();
   }
 
@@ -298,6 +327,7 @@ class PlayerController extends ChangeNotifier {
     if (queue[idx].path == item.path) {
       index = idx;
     }
+    _persistQueue();
     notifyListeners();
   }
 
@@ -345,6 +375,7 @@ class PlayerController extends ChangeNotifier {
 
   void toggleShuffle() {
     shuffle = !shuffle;
+    _persistQueue();
     notifyListeners();
   }
 
@@ -354,6 +385,7 @@ class PlayerController extends ChangeNotifier {
         : repeat == RepeatMode.all
             ? RepeatMode.one
             : RepeatMode.off;
+    _persistQueue();
     notifyListeners();
   }
 
@@ -502,6 +534,7 @@ class PlayerController extends ChangeNotifier {
       NativeBridge.setEqGains(
         s.eqEnabled ? s.eqGains : List.filled(10, 0.0),
       );
+      NativeBridge.setBassBoost(s.eqEnabled ? s.bassBoost : 0);
       return;
     }
     if (_player == null) return;
@@ -524,22 +557,53 @@ class PlayerController extends ChangeNotifier {
     } catch (_) {}
   }
 
-  // ---------- Таймер сна ----------
+  // ---------- Таймер сна (с fade-out 15с как в Poweramp) ----------
+  Timer? _sleepFadeTicker;
 
   void setSleepTimer(Duration? d) {
     _sleepTimer?.cancel();
+    _sleepFadeTicker?.cancel();
     if (d == null) {
       sleepEndsAt = null;
       notifyListeners();
       return;
     }
     sleepEndsAt = DateTime.now().add(d);
-    _sleepTimer = Timer(d, () async {
-      await _backendPause();
-      sleepEndsAt = null;
-      notifyListeners();
-    });
     notifyListeners();
+    _sleepTimer = Timer(d, () async {
+      // Fade-out 15с: снижаем громкость ступенями
+      final startVol = _volumeBeforeMute != null ? _volumeBeforeMute! : _volume;
+      if (startVol <= 0) {
+        await _backendPause();
+        sleepEndsAt = null;
+        notifyListeners();
+        return;
+      }
+      const steps = 15;
+      var step = 0;
+      _sleepFadeTicker = Timer.periodic(const Duration(seconds: 1), (t) async {
+        step++;
+        final f = 1 - step / steps; // 0.93..0
+        final v = (startVol * f).clamp(0, 100).toDouble();
+        if (_isAndroid) {
+          await _androidBackend?.setVolume(v);
+        } else {
+          await _player?.setVolume(v);
+        }
+        _volume = v;
+        notifyListeners();
+        if (step >= steps) {
+          t.cancel();
+          await _backendPause();
+          // восстанавливаем громкость для следующего запуска
+          _volume = startVol;
+          if (_isAndroid) await _androidBackend?.setVolume(startVol);
+          else await _player?.setVolume(startVol);
+          sleepEndsAt = null;
+          notifyListeners();
+        }
+      });
+    });
   }
 
   // ---------- Жизненный цикл ----------

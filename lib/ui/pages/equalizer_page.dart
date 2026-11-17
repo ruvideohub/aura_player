@@ -174,12 +174,39 @@ class EqualizerPage extends ConsumerWidget {
                           );
                         },
                       ),
+                      // Bass Boost — системный (Android audiofx)
+                      if (NativeBridge.isAndroid) ...[
+                        const Divider(height: 24),
+                        Row(
+                          children: [
+                            Icon(Icons.speaker_rounded, size: 18, color: accent),
+                            const SizedBox(width: 8),
+                            const Text('Bass Boost', style: TextStyle(fontWeight: FontWeight.w600)),
+                            const Spacer(),
+                            Text('${(settings.bassBoost / 10).round()}%', style: TextStyle(fontSize: 12, color: settings.bassBoost == 0 ? theme.colorScheme.onSurface.withOpacity(0.5) : accent)),
+                          ],
+                        ),
+                        Slider(
+                          min: 0,
+                          max: 1000,
+                          divisions: 20,
+                          value: settings.bassBoost.toDouble(),
+                          label: '${(settings.bassBoost / 10).round()}%',
+                          onChanged: (v) {
+                            settings.setBassBoost(v.round());
+                            apply();
+                          },
+                          activeColor: accent,
+                        ),
+                        Text('Усиливает низкие частоты (0 — выкл, 100% — максимум). Работает на Android.', style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withOpacity(0.5))),
+                      ],
                       const SizedBox(height: 8),
                       Row(
                         children: [
                           TextButton.icon(
                             onPressed: () {
                               settings.applyPreset(eqPresets.first);
+                              settings.setBassBoost(0);
                               apply();
                             },
                             icon: const Icon(Icons.restart_alt_rounded,

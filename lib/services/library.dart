@@ -32,6 +32,7 @@ class LibraryController extends ChangeNotifier {
   File? _libraryFile;
   File? _playlistsFile;
   File? _positionsFile;
+  File? _queueFile;
 
   final Map<String, Uint8List?> _covers = {};
   final Set<String> _pendingCovers = {};
@@ -54,6 +55,7 @@ class LibraryController extends ChangeNotifier {
           File('${base.path}${Platform.pathSeparator}playlists.json');
       _positionsFile =
           File('${base.path}${Platform.pathSeparator}positions.json');
+      _queueFile = File('${base.path}${Platform.pathSeparator}queue.json');
 
       if (await _libraryFile!.exists()) {
         final list = (jsonDecode(await _libraryFile!.readAsString()) as List)
@@ -414,6 +416,27 @@ class LibraryController extends ChangeNotifier {
     positions.clear();
     _persistPositions();
     notifyListeners();
+  }
+
+  // ---------- Очередь (для восстановления после рестарта) ----------
+  Future<void> saveQueue(List<MediaTrack> queue, int index, bool shuffle, String repeat) async {
+    if (_queueFile == null) return;
+    try {
+      await _queueFile!.writeAsString(jsonEncode({
+        'queue': queue.map((t) => t.toJson()).toList(),
+        'index': index,
+        'shuffle': shuffle,
+        'repeat': repeat,
+      }));
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>?> loadQueue() async {
+    if (_queueFile == null) return null;
+    try {
+      if (!await _queueFile!.exists()) return null;
+      return jsonDecode(await _queueFile!.readAsString()) as Map<String, dynamic>;
+    } catch (_) { return null; }
   }
 
   @override
