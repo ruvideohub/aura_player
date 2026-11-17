@@ -459,6 +459,18 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> stopAndClearCurrent() async {
+    await _backendPause();
+    // показываем медиатеку: оставляем очередь, но убираем current
+    // если это было видео - просто сбрасываем index, аудио-плеер останется в фоне тихо
+    _saveCurrentPosition();
+    index = -1;
+    _duration = Duration.zero;
+    _position = Duration.zero;
+    _playing = false;
+    notifyListeners();
+  }
+
   Future<void> setVolume(double v) async {
     _volumeBeforeMute = null;
     _volume = v.clamp(0, 100);
