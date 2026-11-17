@@ -193,32 +193,34 @@ class AndroidPlayerBackend {
     await _controller?.setPlaybackSpeed(_rate);
   }
 
-  /// Виджет видео — SurfaceView через Texture (Media3)
+  /// Виджет видео — SurfaceView через Texture (Media3) — всегда чёрный фон
   Widget buildVideoView({bool fitCover = false}) {
     final c = _controller;
     if (c == null || !c.value.isInitialized) {
       return const ColoredBox(color: Colors.black);
     }
-    // VideoPlayer уже отдаёт правильный aspectRatio
     final player = VideoPlayer(c);
-    if (fitCover) {
-      return SizedBox.expand(
-        child: FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: c.value.size.width == 0 ? 1280 : c.value.size.width,
-            height: c.value.size.height == 0 ? 720 : c.value.size.height,
-            child: player,
-          ),
-        ),
-      );
-    }
-    return Center(
-      child: AspectRatio(
-        aspectRatio: c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
-        child: player,
-      ),
+    final wrapped = Container(
+      color: Colors.black,
+      child: fitCover
+          ? SizedBox.expand(
+              child: FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: c.value.size.width == 0 ? 1280 : c.value.size.width,
+                  height: c.value.size.height == 0 ? 720 : c.value.size.height,
+                  child: player,
+                ),
+              ),
+            )
+          : Center(
+              child: AspectRatio(
+                aspectRatio: c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
+                child: player,
+              ),
+            ),
     );
+    return wrapped;
   }
 
   Future<void> _disposeController() async {
