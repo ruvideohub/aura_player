@@ -22,6 +22,9 @@ class PlayerGestureOverlay extends StatefulWidget {
   final VoidCallback onTap;
   final VoidCallback onDoubleTapLeft;
   final VoidCallback onDoubleTapRight;
+  final VoidCallback? onInteractionStart;
+  final VoidCallback? onInteractionUpdate;
+  final VoidCallback? onInteractionEnd;
   const PlayerGestureOverlay({
     super.key,
     required this.child,
@@ -29,6 +32,9 @@ class PlayerGestureOverlay extends StatefulWidget {
     required this.onTap,
     required this.onDoubleTapLeft,
     required this.onDoubleTapRight,
+    this.onInteractionStart,
+    this.onInteractionUpdate,
+    this.onInteractionEnd,
   });
 
   @override
@@ -61,12 +67,13 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay> {
     _hudBri.value = null;
     _hudVol.value = null;
     _bump();
+    widget.onInteractionUpdate?.call();
   }
 
   void _onSeekEnd(int pos) {
     _hudSeek.value = null;
-    // fire-and-forget seek — не блокируем жест
     unawaited(widget.player.seek(Duration(milliseconds: pos)));
+    widget.onInteractionEnd?.call();
   }
 
   void _onBri(double v) {
@@ -74,6 +81,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay> {
     _hudVol.value = null;
     _hudSeek.value = null;
     _bump();
+    widget.onInteractionUpdate?.call();
   }
 
   void _onVol(double v) {
@@ -81,7 +89,10 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay> {
     _hudBri.value = null;
     _hudSeek.value = null;
     _bump();
+    widget.onInteractionUpdate?.call();
   }
+
+  void _onPanStart() => widget.onInteractionStart?.call();
 
   @override
   void dispose() {
@@ -107,6 +118,7 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay> {
             onTap: widget.onTap,
             onDoubleTapLeft: widget.onDoubleTapLeft,
             onDoubleTapRight: widget.onDoubleTapRight,
+            onPanStart: _onPanStart,
             onSeek: _onSeek,
             onSeekEnd: _onSeekEnd,
             onBrightness: _onBri,
@@ -145,6 +157,7 @@ class _ThrottledPan extends StatefulWidget {
   final VoidCallback onTap;
   final VoidCallback onDoubleTapLeft;
   final VoidCallback onDoubleTapRight;
+  final VoidCallback? onPanStart;
   final void Function(int pos, int dur, bool fwd) onSeek;
   final void Function(int pos) onSeekEnd;
   final void Function(double v) onBrightness;
@@ -156,6 +169,7 @@ class _ThrottledPan extends StatefulWidget {
     required this.onTap,
     required this.onDoubleTapLeft,
     required this.onDoubleTapRight,
+    this.onPanStart,
     required this.onSeek,
     required this.onSeekEnd,
     required this.onBrightness,
@@ -192,6 +206,7 @@ class _ThrottledPanState extends State<_ThrottledPan> {
         else widget.onTap();
       },
       onPanStart: (d) {
+        widget.onPanStart?.call();
         _start = d.localPosition;
         _accX = 0;
         _accY = 0;

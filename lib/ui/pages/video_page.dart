@@ -58,7 +58,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
 
   void _scheduleHide(PlayerController player) {
     _hideTimer?.cancel();
-    _hideTimer = Timer(const Duration(seconds: 3), () {
+    _hideTimer = Timer(const Duration(seconds: 4), () {
       if (mounted && ref.read(playerProvider).isPlaying && _controlsVisible) setState(() => _controlsVisible = false);
     });
   }
@@ -74,6 +74,15 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     } else {
       _showControls(player);
     }
+  }
+  // Удерживаем оверлей пока пользователь трогает контролы
+  void _pauseHide() => _hideTimer?.cancel();
+  void _resumeHide(PlayerController player) {
+    if (_controlsVisible && ref.read(playerProvider).isPlaying) _scheduleHide(player);
+  }
+  void _nudgeControls(PlayerController player) {
+    if (!_controlsVisible) setState(() => _controlsVisible = true);
+    _scheduleHide(player);
   }
 
   Future<void> _toggleFullscreen() async {
@@ -167,6 +176,9 @@ class _VideoPageState extends ConsumerState<VideoPage> {
             onTap: () => _toggleControls(player),
             onDoubleTapLeft: () { player.seek(player.position - const Duration(seconds: 10)); _showControls(player); },
             onDoubleTapRight: () { player.seek(player.position + const Duration(seconds: 10)); _showControls(player); },
+            onInteractionStart: () { _hideTimer?.cancel(); if (!_controlsVisible) setState(() => _controlsVisible = true); },
+            onInteractionUpdate: _pauseHide,
+            onInteractionEnd: () => _resumeHide(player),
             child: const ColoredBox(color: Colors.transparent),
           ),
         ),
@@ -182,7 +194,11 @@ class _VideoPageState extends ConsumerState<VideoPage> {
             child: AnimatedOpacity(
               opacity: _controlsVisible ? 1 : 0,
               duration: const Duration(milliseconds: 180),
-              child: GestureDetector(behavior: HitTestBehavior.translucent, onTap: () => _toggleControls(player), child: _topBar(context, player, current)),
+              child: Listener(
+                onPointerDown: (_) => _pauseHide(),
+                onPointerUp: (_) => _resumeHide(player),
+                child: GestureDetector(behavior: HitTestBehavior.translucent, onTap: () => _toggleControls(player), child: _topBar(context, player, current)),
+              ),
             ),
           ),
         ),
@@ -341,29 +357,37 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     final isPlaying = ref.watch(playerProvider.select((p) => p.isPlaying));
     final muted = ref.watch(playerProvider.select((p) => p.muted));
     final volume = ref.watch(playerProvider.select((p) => p.volume));
-    return Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), color: Colors.black.withOpacity(0.55), child: Column(children: [
-      const LiveSeekBar(compact: true), const SizedBox(height:2),
+    // Любое касание контролов продлевает оверлей, а перетаскивание сикбара/громкости его удерживает
+    return Listener(
+      onPointerDown: (_) => _pauseHide(),
+      onPointerUp: (_) => _resumeHide(player),
+      onPointerCancel: (_) => _resumeHide(player),
+      child: Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), color: Colors.black.withOpacity(0.55), child: Column(children: [
+      LiveSeekBar(compact: true, onDragStart: _pauseHide, onDragEnd: () => _resumeHide(player)),
+      const SizedBox(height:2),
       Row(children: [
-        IconButton(tooltip:'Предыдущий', onPressed: player.prev, icon: const Icon(Icons.skip_previous_rounded, color: Colors.white)),
-        GestureDetector(onTap: player.togglePlay, child: Container(width:52, height:52, decoration: BoxDecoration(color: theme.colorScheme.primary, shape: BoxShape.circle), child: Icon(isPlaying?Icons.pause_rounded:Icons.play_arrow_rounded, color: Colors.black, size:30))),
-        IconButton(tooltip:'Следующий', onPressed: ()=>player.next(manual:true), icon: const Icon(Icons.skip_next_rounded, color: Colors.white)),
+        IconButton(tooltip:'Предыдущий', onPressed: () { player.prev(); _nudgeControls(player); }, icon: const Icon(Icons.skip_previous_rounded, color: Colors.white)),
+        GestureDetector(onTap: () { player.togglePlay(); _nudgeControls(player); }, child: Container(width:52, height:52, decoration: BoxDecoration(color: theme.colorScheme.primary, shape: BoxShape.circle), child: Icon(isPlaying?Icons.pause_rounded:Icons.play_arrow_rounded, color: Colors.black, size:30))),
+        IconButton(tooltip:'Следующий', onPressed: (){ player.next(manual:true); _nudgeControls(player); }, icon: const Icon(Icons.skip_next_rounded, color: Colors.white)),
         const SizedBox(width:4),
-        IconButton(tooltip:'Без звука', onPressed: player.toggleMute, icon: Icon(muted||volume==0?Icons.volume_off_rounded:Icons.volume_up_rounded, color: Colors.white, size:20)),
-        SizedBox(width:110, child: _VideoVolumeSlider(volume: volume, player: player)),
+        IconButton(tooltip:'Без звука', onPressed: () { player.toggleMute(); _nudgeControls(player); }, icon: Icon(muted||volume==0?Icons.volume_off_rounded:Icons.volume_up_rounded, color: Colors.white, size:20)),
+        SizedBox(width:110, child: _VideoVolumeSlider(volume: volume, player: player, onDragStart: _pauseHide, onDragEnd: () => _resumeHide(player))),
         const Spacer(),
-        IconButton(tooltip:'Полный экран', onPressed: _toggleFullscreen, icon: Icon(ref.watch(fullscreenProvider)?Icons.fullscreen_exit_rounded:Icons.fullscreen_rounded, color: Colors.white)),
+        IconButton(tooltip:'Полный экран', onPressed: () { _toggleFullscreen(); _nudgeControls(player); }, icon: Icon(ref.watch(fullscreenProvider)?Icons.fullscreen_exit_rounded:Icons.fullscreen_rounded, color: Colors.white)),
       ]),
-    ]));
+    ])),
+    );
   }
 
 }
 
 class _VideoVolumeSlider extends StatelessWidget {
   final double volume; final PlayerController player;
-  const _VideoVolumeSlider({required this.volume, required this.player});
+  final VoidCallback? onDragStart; final VoidCallback? onDragEnd;
+  const _VideoVolumeSlider({required this.volume, required this.player, this.onDragStart, this.onDragEnd});
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return SliderTheme(data: const SliderThemeData(trackHeight:3, thumbShape: RoundSliderThumbShape(enabledThumbRadius:6), overlayShape: RoundSliderOverlayShape(overlayRadius:10)), child: Slider(value: volume.clamp(0,100), max:100, onChanged: player.setVolume, activeColor: theme.colorScheme.primary, inactiveColor: Colors.white24));
+    return SliderTheme(data: const SliderThemeData(trackHeight:3, thumbShape: RoundSliderThumbShape(enabledThumbRadius:6), overlayShape: RoundSliderOverlayShape(overlayRadius:10)), child: Slider(value: volume.clamp(0,100), max:100, onChangeStart: onDragStart != null ? (_) => onDragStart!.call() : null, onChangeEnd: onDragEnd != null ? (_) => onDragEnd!.call() : null, onChanged: (v) { player.setVolume(v); }, activeColor: theme.colorScheme.primary, inactiveColor: Colors.white24));
   }
 }

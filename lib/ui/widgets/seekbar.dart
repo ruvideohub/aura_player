@@ -9,6 +9,8 @@ class SeekBar extends StatelessWidget {
   final Duration position;
   final Duration duration;
   final ValueChanged<Duration> onSeek;
+  final VoidCallback? onSeekStart;
+  final VoidCallback? onSeekEnd;
   final bool showTimes;
   final bool compact;
 
@@ -17,6 +19,8 @@ class SeekBar extends StatelessWidget {
     required this.position,
     required this.duration,
     required this.onSeek,
+    this.onSeekStart,
+    this.onSeekEnd,
     this.showTimes = true,
     this.compact = false,
   });
@@ -42,6 +46,8 @@ class SeekBar extends StatelessWidget {
       child: Slider(
         value: value,
         max: usableMax,
+        onChangeStart: onSeekStart != null ? (_) => onSeekStart!.call() : null,
+        onChangeEnd: onSeekEnd != null ? (_) => onSeekEnd!.call() : null,
         onChanged: maxMs > 0
             ? (v) => onSeek(Duration(milliseconds: v.round()))
             : null,
@@ -72,7 +78,9 @@ class SeekBar extends StatelessWidget {
 class LiveSeekBar extends ConsumerWidget {
   final bool compact;
   final bool showTimes;
-  const LiveSeekBar({super.key, this.compact = false, this.showTimes = true});
+  final VoidCallback? onDragStart;
+  final VoidCallback? onDragEnd;
+  const LiveSeekBar({super.key, this.compact = false, this.showTimes = true, this.onDragStart, this.onDragEnd});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -83,7 +91,7 @@ class LiveSeekBar extends ConsumerWidget {
       initialData: player.position,
       builder: (_, snap) {
         final pos = snap.data ?? player.position;
-        return SeekBar(position: pos, duration: duration, onSeek: player.seek, compact: compact, showTimes: showTimes);
+        return SeekBar(position: pos, duration: duration, onSeek: player.seek, onSeekStart: onDragStart, onSeekEnd: onDragEnd, compact: compact, showTimes: showTimes);
       },
     );
   }
