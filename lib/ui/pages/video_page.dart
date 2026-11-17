@@ -197,18 +197,6 @@ class _VideoPageState extends ConsumerState<VideoPage> {
             ),
           ),
         ),
-        // Если контролы скрыты — большая кнопка по центру чтобы вернуть
-        if (!_controlsVisible)
-          Center(
-            child: GestureDetector(
-              onTap: () => _showControls(player),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(24), border: Border.all(color: Colors.white24)),
-                child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.touch_app_rounded, color: Colors.white70, size: 18), SizedBox(width: 8), Text('Показать управление', style: TextStyle(color: Colors.white, fontSize: 13))]),
-              ),
-            ),
-          ),
         // Жесты поверх видео
         Positioned.fill(
           child: PlayerGestureOverlay(
@@ -265,6 +253,19 @@ class _VideoPageState extends ConsumerState<VideoPage> {
             ),
           ),
         ),
+        // Кнопка Показать управление — поверх всего, когда контролы скрыты
+        if (!_controlsVisible)
+          Center(
+            child: GestureDetector(
+              onTap: () => _showControls(player),
+              behavior: HitTestBehavior.opaque,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(24), border: Border.all(color: Colors.white24)),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.touch_app_rounded, color: Colors.white70, size: 18), SizedBox(width: 8), Text('Показать управление', style: TextStyle(color: Colors.white, fontSize: 13))]),
+              ),
+            ),
+          ),
       ]),
     );
   }
