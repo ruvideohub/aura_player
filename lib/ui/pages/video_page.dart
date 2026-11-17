@@ -12,7 +12,6 @@ import 'package:window_manager/window_manager.dart';
 import '../../core/formatters.dart';
 import '../../models/models.dart';
 import '../../services/library.dart';
-import '../../services/native_bridge.dart';
 import '../../state/player_controller.dart';
 import '../state/ui_state.dart';
 import '../widgets/cover_art.dart';
@@ -59,7 +58,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
 
   void _scheduleHide(PlayerController player) {
     _hideTimer?.cancel();
-    _hideTimer = Timer(const Duration(seconds: 4), () {
+    _hideTimer = Timer(const Duration(seconds: 3), () {
       if (mounted && ref.read(playerProvider).isPlaying && _controlsVisible) setState(() => _controlsVisible = false);
     });
   }
@@ -97,7 +96,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   }
 
   Future<void> _openVideo() async {
-    const typeGroup = XTypeGroup(label: 'Видео', extensions: [...videoExtensions, ...streamExtensions]);
+    const typeGroup = XTypeGroup(label: 'Видео', extensions: videoExtensions);
     try {
       final files = await openFiles(acceptedTypeGroups: [typeGroup]);
       if (files.isEmpty) return;
@@ -107,35 +106,6 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
     }
-  }
-
-  Future<void> _openStream() async {
-    final ctrl = TextEditingController();
-    final url = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Открыть поток'),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Поддерживает HLS (.m3u8), DASH (.mpd), fMP4 (.m4s), RTMP/RTSP', style: TextStyle(fontSize: 12)),
-          const SizedBox(height: 12),
-          TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(hintText: 'https://example.com/stream.m3u8', prefixIcon: Icon(Icons.link_rounded)), onSubmitted: (v) => Navigator.pop(ctx, v)),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Открыть')),
-        ],
-      ),
-    );
-    if (url == null || url.trim().isEmpty) return;
-    final u = url.trim();
-    if (!isStreamUrl(u) && !streamExtensions.contains(extOf(u)) && !u.contains('.m3u8') && !u.contains('.mpd')) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Вставь http(s) ссылку на поток')));
-      return;
-    }
-    final track = MediaTrack.fromUrl(u, isVideo: true);
-    ref.read(libraryProvider).importTracks([track]);
-    await ref.read(playerProvider).open([track], 0);
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Открываю: ${track.title}')));
   }
 
   @override
@@ -154,50 +124,15 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     return _videoLibrary(context, player);
   }
 
-  void _cycleFit() {
-    final cur = ref.read(videoFitProvider);
-    final next = VideoFit.values[(cur.index + 1) % VideoFit.values.length];
-    ref.read(videoFitProvider.notifier).state = next;
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(duration: const Duration(milliseconds: 900), content: Text('Экран: ${next.label} (${next.shortLabel})')),
-      );
-    }
-  }
-
   Widget _videoPlayer(BuildContext context, PlayerController player, MediaTrack current) {
-    final fit = ref.watch(videoFitProvider);
+    // УЛЬТРА-МИНИМАЛКА: только видео, без единого оверлея — чтобы проверить, белый от UI или от самого видео
+    // Если после этого белый останется — это интро видео, а не наш косяк
+    // Жесты и контролы временно отключены, только видео
     return ColoredBox(
       color: Colors.black,
-      child: Stack(children: [
-        // Видео — один слой, без дублирования, с выбранным aspect ratio
-        Positioned.fill(child: player.buildVideoView(fit: fit)),
-        // Диагностика — всегда видно чтобы понять что файл открыт (у RTX 4060 должно быть vc:ok)
-        Positioned(
-          left: 8, top: 8,
-          child: IgnorePointer(
-            child: StreamBuilder<Duration>(
-              stream: player.positionStream,
-              builder: (ctx, posSnap) {
-                final pos = posSnap.data ?? player.position;
-                final dur = player.duration;
-                String extra = '';
-                try {
-                  final vc = (player as dynamic).videoController;
-                  extra = vc != null ? ' vc:ok' : ' vc:null';
-                  // попробуем достать размеры если есть
-                  try { final w = vc?.width; final h = vc?.height; if (w != null && h != null) extra += ' ${w}x$h'; } catch (_) {}
-                } catch (_) {}
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
-                  child: Text('${current.ext.toUpperCase()} ${dur.inSeconds}s ${pos.inSeconds}s$extra ${player.isPlaying ? '▶' : '⏸'}', style: const TextStyle(color: Colors.white, fontSize: 10)),
-                );
-              },
-            ),
-          ),
-        ),
-        // Жесты поверх видео
+      child: Stack(fit: StackFit.expand, children: [
+        Positioned.fill(child: ColoredBox(color: Colors.black, child: player.buildVideoView())),
+        // Твой Compose-оверлей — без белого, жесты под панелями
         Positioned.fill(
           child: PlayerGestureOverlay(
             player: player,
@@ -211,20 +146,6 @@ class _VideoPageState extends ConsumerState<VideoPage> {
           if (snap.data != true) return const SizedBox.shrink();
           return const Center(child: SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white)));
         }),
-        // HUD подсказки свайпа + aspect badge
-        if (_controlsVisible)
-          Positioned(
-            top: 56, left: 0, right: 0,
-            child: IgnorePointer(
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
-                  child: Text('${fit.shortLabel} • ${fit.label}', style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600)),
-                ),
-              ),
-            ),
-          ),
         // Контролы — только top и bottom, центр свободен
         Positioned(
           top: 0, left: 0, right: 0,
@@ -279,7 +200,6 @@ class _VideoPageState extends ConsumerState<VideoPage> {
           const SizedBox(height: 20),
           Wrap(spacing: 12, alignment: WrapAlignment.center, children: [
             FilledButton.icon(onPressed: _openVideo, icon: const Icon(Icons.folder_open_rounded), label: const Text('Открыть видео')),
-            FilledButton.icon(onPressed: _openStream, icon: const Icon(Icons.stream_rounded), label: const Text('Открыть поток'), style: FilledButton.styleFrom(backgroundColor: theme.colorScheme.secondary)),
             OutlinedButton.icon(onPressed: () async { final m = ScaffoldMessenger.of(context); await lib.scan(); m.showSnackBar(SnackBar(content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded}'))); }, icon: lib.scanning ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh_rounded), label: Text(lib.scanning ? 'Сканирую...' : 'Сканировать')),
             TextButton(onPressed: () => ref.read(pageProvider.notifier).state = 4, child: const Text('Настройки')),
           ]),
@@ -296,7 +216,6 @@ class _VideoPageState extends ConsumerState<VideoPage> {
           DropdownButton<String>(value: _sort, underline: const SizedBox.shrink(), borderRadius: BorderRadius.circular(12), items: const [DropdownMenuItem(value: 'date', child: Text('По дате')), DropdownMenuItem(value: 'title', child: Text('По названию')), DropdownMenuItem(value: 'duration', child: Text('По длительности'))], onChanged: (v) => setState(() => _sort = v ?? 'date')),
           const SizedBox(width: 8),
           IconButton(tooltip: 'Открыть файлы', onPressed: _openVideo, icon: const Icon(Icons.add_rounded)),
-          IconButton(tooltip: 'Открыть поток (HLS/DASH/fMP4)', onPressed: _openStream, icon: const Icon(Icons.stream_rounded)),
           IconButton(tooltip: 'Сканировать', onPressed: lib.scanning ? null : () async { final m = ScaffoldMessenger.of(context); await lib.scan(); m.showSnackBar(SnackBar(content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded}'))); }, icon: lib.scanning ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh_rounded)),
         ]),
         const SizedBox(height: 8),
@@ -328,49 +247,15 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     return sorted;
   }
 
-  Future<void> _enterPip(PlayerController player) async {
-    if (_isDesktop) return;
-    final c = player.androidVideoController;
-    final w = (c?.value.size.width ?? 16).toInt().clamp(1, 1920);
-    final h = (c?.value.size.height ?? 9).toInt().clamp(1, 1920);
-    final ok = await NativeBridge.enterPip(width: w, height: h);
-    if (!ok && mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PiP не поддерживается на этом устройстве')));
-  }
-
   Widget _topBar(BuildContext context, PlayerController player, MediaTrack t) {
     final isAndroid = player.isAndroid;
-    return Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), color: Colors.black.withOpacity(0.45), child: Row(children: [
-      IconButton(tooltip: 'Назад к медиатеке', icon: const Icon(Icons.arrow_back_rounded, color: Colors.white), onPressed: () async { await player.stopAndClearCurrent(); if (mounted) _hideTimer?.cancel(); }),
+    return Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.65), Colors.transparent])), child: Row(children: [
+      IconButton(tooltip: 'Закрыть', icon: const Icon(Icons.close_rounded, color: Colors.white), onPressed: () async { await player.stopAndClearCurrent(); if (mounted) _hideTimer?.cancel(); }),
       Expanded(child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white))),
-      _fitMenu(context),
       _speedMenu(context, player),
       if (!isAndroid) ...[IconButton(tooltip: 'Аудиодорожка', icon: const Icon(Icons.audiotrack_rounded, color: Colors.white), onPressed: () => _audioTrackMenu(context, player)), IconButton(tooltip: 'Субтитры', icon: const Icon(Icons.subtitles_outlined, color: Colors.white), onPressed: () => _subtitleMenu(context, player))] else Tooltip(message: 'Дорожки/субтитры — позже', child: IconButton(icon: const Icon(Icons.subtitles_outlined, color: Colors.white38), onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Дорожки скоро на Media3'))))),
-      IconButton(tooltip: 'Картинка-в-картинке', icon: const Icon(Icons.picture_in_picture_alt_rounded, color: Colors.white), onPressed: () => _enterPip(player)),
       IconButton(tooltip: 'Полный экран', icon: Icon(ref.watch(fullscreenProvider) ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded, color: Colors.white), onPressed: _toggleFullscreen),
     ]));
-  }
-
-  Widget _fitMenu(BuildContext context) {
-    final fit = ref.watch(videoFitProvider);
-    return PopupMenuButton<VideoFit>(
-      tooltip: 'Масштаб: ${fit.label}',
-      icon: Stack(alignment: Alignment.center, children: [
-        const Icon(Icons.aspect_ratio_rounded, color: Colors.white, size: 22),
-        Positioned(bottom: 0, child: Container(padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 0), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(3)), child: Text(fit.shortLabel, style: const TextStyle(fontSize: 6, fontWeight: FontWeight.bold, color: Colors.black)))),
-      ]),
-      onSelected: (v) {
-        ref.read(videoFitProvider.notifier).state = v;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(milliseconds: 900), content: Text('Экран: ${v.label}')));
-      },
-      itemBuilder: (_) => [
-        for (final f in VideoFit.values)
-          PopupMenuItem(value: f, child: Row(children: [
-            Icon(fit == f ? Icons.radio_button_checked : Icons.radio_button_off, size: 16, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(width: 8),
-            Text('${f.label}  (${f.shortLabel})', style: TextStyle(fontWeight: fit == f ? FontWeight.bold : FontWeight.normal)),
-          ])),
-      ],
-    );
   }
 
   Widget _speedMenu(BuildContext context, PlayerController player) {
@@ -389,8 +274,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
 
   Widget _bottomBar(BuildContext context, PlayerController player) {
     final theme = Theme.of(context);
-    final fit = ref.watch(videoFitProvider);
-    return Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), color: Colors.black.withOpacity(0.45), child: Column(children: [
+    return Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Colors.black.withOpacity(0.65), Colors.transparent])), child: Column(children: [
       SeekBar(position: player.position, duration: player.duration, onSeek: player.seek, compact: true), const SizedBox(height:2),
       Row(children: [
         IconButton(tooltip:'Предыдущий', onPressed: player.prev, icon: const Icon(Icons.skip_previous_rounded, color: Colors.white)),
@@ -400,10 +284,6 @@ class _VideoPageState extends ConsumerState<VideoPage> {
         IconButton(tooltip:'Без звука', onPressed: player.toggleMute, icon: Icon(player.muted||player.volume==0?Icons.volume_off_rounded:Icons.volume_up_rounded, color: Colors.white, size:20)),
         SizedBox(width:110, child: SliderTheme(data: SliderTheme.of(context).copyWith(trackHeight:3, thumbShape: const RoundSliderThumbShape(enabledThumbRadius:6), overlayShape: const RoundSliderOverlayShape(overlayRadius:10)), child: Slider(value: player.volume.clamp(0,100), max:100, onChanged: player.setVolume, activeColor: theme.colorScheme.primary, inactiveColor: Colors.white24))),
         const Spacer(),
-        IconButton(tooltip: 'Картинка-в-картинке', onPressed: () => _enterPip(player), icon: const Icon(Icons.picture_in_picture_alt_rounded, color: Colors.white, size: 20)),
-        // aspect ratio быстрая кнопка
-        Tooltip(message: 'Масштаб: ${fit.label} (${fit.shortLabel})', child: InkWell(onTap: _cycleFit, borderRadius: BorderRadius.circular(8), child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)), child: Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.aspect_ratio_rounded, color: Colors.white, size: 16), const SizedBox(width: 4), Text(fit.shortLabel, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold))])))),
-        const SizedBox(width: 8),
         IconButton(tooltip:'Полный экран', onPressed: _toggleFullscreen, icon: Icon(ref.watch(fullscreenProvider)?Icons.fullscreen_exit_rounded:Icons.fullscreen_rounded, color: Colors.white)),
       ]),
     ]));
