@@ -59,7 +59,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
 
   void _scheduleHide(PlayerController player) {
     _hideTimer?.cancel();
-    _hideTimer = Timer(const Duration(seconds: 3), () {
+    _hideTimer = Timer(const Duration(seconds: 4), () {
       if (mounted && ref.read(playerProvider).isPlaying && _controlsVisible) setState(() => _controlsVisible = false);
     });
   }
@@ -172,7 +172,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
       child: Stack(children: [
         // Видео — один слой, без дублирования, с выбранным aspect ratio
         Positioned.fill(child: player.buildVideoView(fit: fit)),
-        // Диагностика: если видео не рендерится — покажем размеры/состояние (тап по центру)
+        // Диагностика — всегда видно чтобы понять что файл открыт (у RTX 4060 должно быть vc:ok)
         Positioned(
           left: 8, top: 8,
           child: IgnorePointer(
@@ -181,21 +181,34 @@ class _VideoPageState extends ConsumerState<VideoPage> {
               builder: (ctx, posSnap) {
                 final pos = posSnap.data ?? player.position;
                 final dur = player.duration;
-                // Desktop: можно показать width/height из player.state
                 String extra = '';
                 try {
-                  final w = (player as dynamic).videoController != null ? 'vc:ok' : 'vc:null';
-                  extra = ' $w';
+                  final vc = (player as dynamic).videoController;
+                  extra = vc != null ? ' vc:ok' : ' vc:null';
+                  // попробуем достать размеры если есть
+                  try { final w = vc?.width; final h = vc?.height; if (w != null && h != null) extra += ' ${w}x$h'; } catch (_) {}
                 } catch (_) {}
                 return Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                   decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
-                  child: Text('${current.ext.toUpperCase()} ${dur.inSeconds}s ${pos.inSeconds}s$extra', style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                  child: Text('${current.ext.toUpperCase()} ${dur.inSeconds}s ${pos.inSeconds}s$extra ${player.isPlaying ? '▶' : '⏸'}', style: const TextStyle(color: Colors.white, fontSize: 10)),
                 );
               },
             ),
           ),
         ),
+        // Если контролы скрыты — большая кнопка по центру чтобы вернуть
+        if (!_controlsVisible)
+          Center(
+            child: GestureDetector(
+              onTap: () => _showControls(player),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(24), border: Border.all(color: Colors.white24)),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.touch_app_rounded, color: Colors.white70, size: 18), SizedBox(width: 8), Text('Показать управление', style: TextStyle(color: Colors.white, fontSize: 13))]),
+              ),
+            ),
+          ),
         // Жесты поверх видео
         Positioned.fill(
           child: PlayerGestureOverlay(
