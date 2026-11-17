@@ -106,7 +106,7 @@
             android:layout_height="42dp"
             android:background="?android:attr/selectableItemBackgroundBorderless"
             android:src="@android:drawable/ic_media_previous"
-            android:colorFilter="#F59E0B"
+            android:tint="#F59E0B"
             android:contentDescription="prev" />
 
         <ImageButton
@@ -115,7 +115,7 @@
             android:layout_height="48dp"
             android:background="#1AF59E0B"
             android:src="@android:drawable/ic_media_play"
-            android:colorFilter="#F59E0B"
+            android:tint="#F59E0B"
             android:contentDescription="play" />
 
         <ImageButton
@@ -124,7 +124,7 @@
             android:layout_height="42dp"
             android:background="?android:attr/selectableItemBackgroundBorderless"
             android:src="@android:drawable/ic_media_next"
-            android:colorFilter="#F59E0B"
+            android:tint="#F59E0B"
             android:contentDescription="next" />
 
         <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
@@ -135,7 +135,7 @@
             android:layout_height="36dp"
             android:background="?android:attr/selectableItemBackgroundBorderless"
             android:src="@android:drawable/ic_menu_view"
-            android:colorFilter="#88FFFFFF"
+            android:tint="#88FFFFFF"
             android:contentDescription="open" />
     </LinearLayout>
 </LinearLayout>
