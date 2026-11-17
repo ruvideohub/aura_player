@@ -11,6 +11,7 @@ import '../../core/theme.dart';
 import '../../services/library.dart';
 import '../../services/native_bridge.dart';
 import '../../services/settings.dart';
+import '../../services/windows_associations.dart';
 import '../../state/player_controller.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -269,6 +270,62 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               ],
             ])),
             const SizedBox(height: 14),
+
+            // Windows: ассоциации + быстрое закрытие
+            if (Platform.isWindows)
+              _card(theme, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                _sectionTitle(theme, Icons.video_file_rounded, 'Windows • Ассоциации', 'Двойной клик по видео открывает AURA'),
+                const SizedBox(height: 10),
+                Text('Расширения: mp4, mkv, avi, mov, webm, m4v, wmv, flv, mpg, ts, 3gp, ogv — можно открыть в проводнике «Открыть с помощью» → AURA Player.', style: TextStyle(fontSize: 12.5, color: theme.colorScheme.onSurface.withOpacity(0.6))),
+                const SizedBox(height: 10),
+                FutureBuilder<bool>(
+                  future: WindowsAssociations.isAssociated(),
+                  builder: (ctx, snap) {
+                    final associated = snap.data ?? false;
+                    final statusText = snap.connectionState == ConnectionState.waiting ? 'Проверка...' : (associated ? '✓ Ассоциировано' : '✗ Не ассоциировано');
+                    final statusColor = associated ? Colors.green : theme.colorScheme.onSurface.withOpacity(0.6);
+                    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        Icon(associated ? Icons.check_circle_rounded : Icons.warning_rounded, size: 18, color: associated ? Colors.green : Colors.orange),
+                        const SizedBox(width: 8),
+                        Text(statusText, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: statusColor)),
+                      ]),
+                      const SizedBox(height: 10),
+                      Wrap(spacing: 8, children: [
+                        FilledButton.icon(
+                          onPressed: associated ? null : () async {
+                            final m = ScaffoldMessenger.of(context);
+                            m.showSnackBar(const SnackBar(content: Text('Регистрирую ассоциации...')));
+                            final ok = await WindowsAssociations.register();
+                            if (!context.mounted) return;
+                            m.showSnackBar(SnackBar(content: Text(ok ? '✓ Готово — теперь двойной клик откроет видео' : 'Ошибка — запусти от имени администратора?')));
+                            setState(() {});
+                          },
+                          icon: const Icon(Icons.app_registration_rounded, size: 18),
+                          label: const Text('Ассоциировать'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: !associated ? null : () async {
+                            final ok = await WindowsAssociations.unregister();
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Ассоциации сняты' : 'Ошибка снятия')));
+                            setState(() {});
+                          },
+                          icon: const Icon(Icons.link_off_rounded, size: 18),
+                          label: const Text('Снять'),
+                        ),
+                      ]),
+                      const SizedBox(height: 8),
+                      Text('Подсказка: можно и вручную — ПКМ по .mp4 → Открыть с помощью → Выбрать AURA Player → «Всегда».', style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withOpacity(0.5))),
+                    ]);
+                  },
+                ),
+                const Divider(height: 20),
+                _sectionTitle(theme, Icons.power_settings_new_rounded, 'Закрытие', 'Быстрый выход без задержки'),
+                const SizedBox(height: 8),
+                Text('Исправлено: крестик и Alt+F4 теперь сразу закрывают окно — плеер не ждёт завершения libmpv, окно уничтожается через windowManager с таймаутом 800мс.', style: TextStyle(fontSize: 12.5, color: theme.colorScheme.onSurface.withOpacity(0.6))),
+              ])),
+            if (Platform.isWindows) const SizedBox(height: 14),
 
             // О приложении — новый дизайн с автором
             _card(theme, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

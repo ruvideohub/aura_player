@@ -10,6 +10,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../models/models.dart';
+import '../../services/launch_args.dart';
 import '../../services/library.dart';
 import '../../services/native_bridge.dart';
 import '../../state/player_controller.dart';
@@ -31,21 +32,29 @@ class AppShell extends ConsumerStatefulWidget {
   ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver {
+class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver, WindowListener {
   bool _dragOver = false;
   final FocusNode _shortcutFocus = FocusNode(debugLabel: 'shortcuts');
   StreamSubscription<String>? _mediaSub;
   StreamSubscription<String>? _openFileSub;
   bool _inPip = false;
   Timer? _notifTimer;
+  bool _closing = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (_isDesktop) windowManager.addListener(this);
     NativeBridge.ensureHandler();
     _mediaSub = NativeBridge.mediaActions.listen(_handleMediaAction);
     _openFileSub = NativeBridge.openFileRequests.listen(_handleOpenFile);
+
+    // Windows быстрый старт — делаем закрытие без задержки
+    if (_isDesktop) {
+      // перехватываем закрытие чтобы не ждать dispose медиаплеера
+      try { windowManager.setPreventClose(true); } catch (_) {}
+    }
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await ref.read(libraryProvider).load();
@@ -66,6 +75,16 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
             _handleOpenFile(pending);
           }
         } catch (_) {}
+      } else {
+        // Desktop: ассоциация двойного клика
+        if (initialLaunchPath != null && initialLaunchPath!.isNotEmpty) {
+          final p = initialLaunchPath!;
+          initialLaunchPath = null;
+          // небольшая задержка чтобы плеер успел инициализироваться
+          Future.delayed(const Duration(milliseconds: 600), () {
+            if (mounted) _handleOpenFile(p);
+          });
+        }
       }
     });
 
@@ -248,8 +267,36 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
   }
 
   @override
+  void onWindowClose() async {
+    if (_closing) return;
+    _closing = true;
+    // Быстрое закрытие без ожидания тяжёлого dispose libmpv
+    try { _notifTimer?.cancel(); } catch (_) {}
+    // Пытаемся быстро остановить плеер без await на нативные ресурсы
+    try { ref.read(playerProvider).pause(); } catch (_) {}
+    // Уничтожаем окно немедленно — ОС прибьёт процесс
+    try { await windowManager.destroy(); } catch (_) {}
+    // Фоллбек: если destroy не сработал за 800мс — жёстко выходим
+    Future.delayed(const Duration(milliseconds: 800), () {
+      try { exit(0); } catch (_) {}
+    });
+  }
+
+  Future<void> _closeApp() async {
+    if (_isDesktop) {
+      onWindowClose();
+    } else {
+      // Android/iOS — обычный выход
+      try { await SystemNavigator.pop(); } catch (_) {}
+    }
+  }
+
+  @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (_isDesktop) {
+      try { windowManager.removeListener(this); } catch (_) {}
+    }
     _mediaSub?.cancel();
     _openFileSub?.cancel();
     _notifTimer?.cancel();
@@ -436,7 +483,7 @@ class _TitleBar extends StatelessWidget {
       Expanded(child: DragToMoveArea(child: SizedBox.expand())),
       _WindowButton(icon: Icons.remove, onTap: () => windowManager.minimize()),
       _WindowButton(icon: Icons.crop_square, onTap: () async { if (await windowManager.isMaximized()) await windowManager.unmaximize(); else await windowManager.maximize(); }),
-      _WindowButton(icon: Icons.close, onTap: () => windowManager.destroy(), hoverColor: Colors.red),
+      _WindowButton(icon: Icons.close, onTap: () => windowManager.close(), hoverColor: Colors.red),
     ]));
   }
 }
