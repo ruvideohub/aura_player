@@ -352,7 +352,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
 
   Widget _topBar(BuildContext context, PlayerController player, MediaTrack t) {
     final isAndroid = player.isAndroid;
-    return Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.65), Colors.transparent])), child: Row(children: [
+    return Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), color: Colors.black.withOpacity(0.45), child: Row(children: [
       IconButton(tooltip: 'Назад к медиатеке', icon: const Icon(Icons.arrow_back_rounded, color: Colors.white), onPressed: () async { await player.stopAndClearCurrent(); if (mounted) _hideTimer?.cancel(); }),
       Expanded(child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white))),
       _fitMenu(context),
@@ -403,7 +403,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   Widget _bottomBar(BuildContext context, PlayerController player) {
     final theme = Theme.of(context);
     final fit = ref.watch(videoFitProvider);
-    return Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Colors.black.withOpacity(0.65), Colors.transparent])), child: Column(children: [
+    return Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), color: Colors.black.withOpacity(0.45), child: Column(children: [
       SeekBar(position: player.position, duration: player.duration, onSeek: player.seek, compact: true), const SizedBox(height:2),
       Row(children: [
         IconButton(tooltip:'Предыдущий', onPressed: player.prev, icon: const Icon(Icons.skip_previous_rounded, color: Colors.white)),
