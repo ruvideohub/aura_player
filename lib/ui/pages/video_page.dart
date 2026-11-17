@@ -33,9 +33,12 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   Timer? _overlayTimer;
   double _startBrightness = 0.5;
   double _startVolume = 0.5;
-  double _fakeBrightness = 1.0; // 0.4..1.0 — фейковая яркость через чёрный оверлей, без системного плагина
+  double _fakeBrightness = 1.0;
   String _query = '';
   String _sort = 'date';
+  // Для различения свайпа: горизонтальный = перемотка, вертикальный = яркость/громкость
+  Offset? _panStart;
+  bool? _isHorizontalPan;
 
   @override
   void dispose() { _hideTimer?.cancel(); _overlayTimer?.cancel(); super.dispose(); }
@@ -49,31 +52,6 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     _overlayTimer = Timer(const Duration(milliseconds: 900), () {
       if (mounted) setState(() { _brightnessOverlay = null; _volumeOverlay = null; });
     });
-  }
-
-  void _onVerticalDragStart(DragStartDetails d, BoxConstraints c) {
-    _startBrightness = _fakeBrightness;
-    _startVolume = ref.read(playerProvider).volume / 100;
-  }
-
-  void _onVerticalDragUpdate(DragUpdateDetails d, BoxConstraints c) {
-    final w = c.maxWidth;
-    final h = c.maxHeight;
-    final x = d.localPosition.dx;
-    final dy = d.delta.dy;
-    final delta = -dy / h;
-    if (x < w * 0.33) {
-      var v = (_brightnessOverlay ?? _startBrightness) + delta;
-      v = v.clamp(0.4, 1.0);
-      setState(() => _fakeBrightness = v);
-      _showOverlay(brightness: v);
-    } else if (x > w * 0.67) {
-      final player = ref.read(playerProvider);
-      var v = (player.volume / 100) + delta;
-      v = v.clamp(0.0, 1.0);
-      player.setVolume(v * 100);
-      _showOverlay(volume: v);
-    }
   }
 
   void _scheduleHide(PlayerController player) {
@@ -152,7 +130,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
       color: Colors.black,
       child: Stack(fit: StackFit.expand, children: [
         Positioned.fill(child: ColoredBox(color: Colors.black, child: player.buildVideoView())),
-        // Жесты: под панелями, translucent — панели получают приоритет, центр не блокируется
+        // Жесты: под панелями, translucent — панели получают приоритет. Дымка только как иконка, не затемняет видео.
         LayoutBuilder(builder: (context, constraints) {
           return Positioned.fill(
             child: GestureDetector(
@@ -165,9 +143,44 @@ class _VideoPageState extends ConsumerState<VideoPage> {
                 else if (x > w * 0.65) { player.seek(player.position + const Duration(seconds: 10)); _showControls(player); }
                 else { _toggleFullscreen(); }
               },
-              onHorizontalDragUpdate: (d) { final delta = Duration(milliseconds: (d.delta.dx * 90).round()); player.seek(player.position + delta); _showControls(player); },
-              onVerticalDragStart: (d) => _onVerticalDragStart(d, constraints),
-              onVerticalDragUpdate: (d) => _onVerticalDragUpdate(d, constraints),
+              // Один Pan вместо двух конкурирующих Drag — не создаёт дымку и не ломает тап
+              onPanStart: (d) {
+                _panStart = d.localPosition;
+                _isHorizontalPan = null;
+                _startBrightness = _fakeBrightness;
+                _startVolume = player.volume / 100;
+              },
+              onPanUpdate: (d) {
+                if (_panStart == null) return;
+                final dx = d.localPosition.dx - _panStart!.dx;
+                final dy = d.localPosition.dy - _panStart!.dy;
+                // Определяем направление один раз
+                _isHorizontalPan ??= dx.abs() > dy.abs();
+                if (_isHorizontalPan == true) {
+                  // Горизонталь — перемотка, без дымки
+                  final delta = Duration(milliseconds: (d.delta.dx * 90).round());
+                  player.seek(player.position + delta);
+                  _showControls(player);
+                } else {
+                  // Вертикаль — яркость/громкость только как иконка, без чёрного оверлея на видео
+                  final w = constraints.maxWidth;
+                  final h = constraints.maxHeight;
+                  final x = _panStart!.dx;
+                  final delta = -d.delta.dy / h;
+                  if (x < w * 0.33) {
+                    var v = (_brightnessOverlay ?? _startBrightness) + delta;
+                    v = v.clamp(0.0, 1.0);
+                    // Не затемняем видео, только показываем подсказку
+                    _showOverlay(brightness: v);
+                  } else if (x > w * 0.67) {
+                    var v = (player.volume / 100) + delta;
+                    v = v.clamp(0.0, 1.0);
+                    player.setVolume(v * 100);
+                    _showOverlay(volume: v);
+                  }
+                }
+              },
+              onPanEnd: (_) { _panStart = null; _isHorizontalPan = null; },
               child: const ColoredBox(color: Colors.transparent),
             ),
           );
