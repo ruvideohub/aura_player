@@ -270,14 +270,23 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
   void onWindowClose() async {
     if (_closing) return;
     _closing = true;
-    // Быстрое закрытие без ожидания тяжёлого dispose libmpv
+    // 1. Мгновенно прячем окно — без подвисания для пользователя
+    try { await windowManager.hide(); } catch (_) {}
+    // 2. Всё тяжёлое — в фоне, не блокируем UI-поток
+    unawaited(_doBackgroundShutdown());
+  }
+
+  Future<void> _doBackgroundShutdown() async {
     try { _notifTimer?.cancel(); } catch (_) {}
-    // Пытаемся быстро остановить плеер без await на нативные ресурсы
-    try { ref.read(playerProvider).pause(); } catch (_) {}
-    // Уничтожаем окно немедленно — ОС прибьёт процесс
-    try { await windowManager.destroy(); } catch (_) {}
-    // Фоллбек: если destroy не сработал за 800мс — жёстко выходим
-    Future.delayed(const Duration(milliseconds: 800), () {
+    // fire-and-forget пауза libmpv — не ждём нативный мост
+    try { unawaited(ref.read(playerProvider).pause()); } catch (_) {}
+    // даём отрисоваться hide, затем корректно уничтожаем окно
+    await Future.delayed(const Duration(milliseconds: 60));
+    try {
+      await windowManager.destroy();
+    } catch (_) {}
+    // фоллбек — жёстко убиваем процесс, если destroy завис на видео-поверхности
+    Future.delayed(const Duration(milliseconds: 500), () {
       try { exit(0); } catch (_) {}
     });
   }
@@ -498,7 +507,7 @@ class _TitleBar extends StatelessWidget {
       Expanded(child: DragToMoveArea(child: SizedBox.expand())),
       _WindowButton(icon: Icons.remove, onTap: () => windowManager.minimize()),
       _WindowButton(icon: Icons.crop_square, onTap: () async { if (await windowManager.isMaximized()) await windowManager.unmaximize(); else await windowManager.maximize(); }),
-      _WindowButton(icon: Icons.close, onTap: () => windowManager.close(), hoverColor: Colors.red),
+      _WindowButton(icon: Icons.close, onTap: () async { try { await windowManager.hide(); } catch (_) {} try { await windowManager.close(); } catch (_) {} }, hoverColor: Colors.red),
     ]));
   }
 }
