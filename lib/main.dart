@@ -11,7 +11,13 @@ import 'services/settings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  MediaKit.ensureInitialized();
+
+  // libmpv только на десктопе. На Android используем Media3 (video_player),
+  // иначе открытие видео (особенно content:// из MediaStore) приводит
+  // к молчаливому вылету libmpv.
+  if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+    MediaKit.ensureInitialized();
+  }
 
   final prefs = await SharedPreferences.getInstance();
 

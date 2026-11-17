@@ -80,9 +80,14 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        Video(
-          controller: player.videoController,
-          controls: (state) => const SizedBox.shrink(),
+        // Адаптивное видео: Media3 SurfaceView на Android, libmpv на десктопе
+        // PlayerController.buildVideoView инкапсулирует выбор бэкенда
+        // и избегает молчаливого вылета libmpv на Android (content://)
+        Positioned.fill(
+          child: ColoredBox(
+            color: Colors.black,
+            child: player.buildVideoView(),
+          ),
         ),
         StreamBuilder<bool>(
           stream: player.bufferingStream,
@@ -139,6 +144,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   }
 
   Widget _topBar(BuildContext context, PlayerController player, MediaTrack t) {
+    final isAndroid = player.isAndroid;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -159,16 +165,31 @@ class _VideoPageState extends ConsumerState<VideoPage> {
             ),
           ),
           _speedMenu(context, player),
-          IconButton(
-            tooltip: 'Аудиодорожка',
-            icon: const Icon(Icons.audiotrack_rounded, color: Colors.white),
-            onPressed: () => _audioTrackMenu(context, player),
-          ),
-          IconButton(
-            tooltip: 'Субтитры',
-            icon: const Icon(Icons.subtitles_outlined, color: Colors.white),
-            onPressed: () => _subtitleMenu(context, player),
-          ),
+          // На Android аудиодорожки/субтитры Media3 пока скрываем — нет вылета
+          if (!isAndroid) ...[
+            IconButton(
+              tooltip: 'Аудиодорожка',
+              icon: const Icon(Icons.audiotrack_rounded, color: Colors.white),
+              onPressed: () => _audioTrackMenu(context, player),
+            ),
+            IconButton(
+              tooltip: 'Субтитры',
+              icon: const Icon(Icons.subtitles_outlined, color: Colors.white),
+              onPressed: () => _subtitleMenu(context, player),
+            ),
+          ] else
+            // На Android показываем подсказку
+            Tooltip(
+              message: 'Дорожки/субтитры — в разработке (Media3)',
+              child: IconButton(
+                icon: const Icon(Icons.subtitles_outlined, color: Colors.white38),
+                onPressed: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Дорожки скоро будут на Media3')),
+                  );
+                },
+              ),
+            ),
           IconButton(
             tooltip: 'Полный экран (F)',
             icon: const Icon(Icons.fullscreen_rounded, color: Colors.white),

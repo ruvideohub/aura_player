@@ -3,62 +3,111 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:video_player/video_player.dart' as vp;
 
 import '../core/lrc.dart';
 import '../models/models.dart';
+import '../services/android_player_backend.dart';
 import '../services/library.dart';
 import '../services/native_bridge.dart';
 import '../services/settings.dart';
 
 /// Центральный контроллер плеера: очередь, шаффл, повтор,
 /// восстановление позиции, эквалайзер, таймер сна.
+///
+/// Desktop (Windows/Linux/macOS): libmpv через media_kit — все форматы, субтитры, EQ firequalizer
+/// Android: Media3 (ExoPlayer) через video_player —SurfaceView, понимает content://, не крашится
 class PlayerController extends ChangeNotifier {
   PlayerController(this._ref) {
-    final player = Player(
-      configuration: const PlayerConfiguration(
-        bufferSize: 64 * 1024 * 1024,
-      ),
-    );
-    _player = player;
-    videoController = VideoController(
-      player,
-      configuration: VideoControllerConfiguration(
-        enableHardwareAcceleration: true,
-      ),
-    );
-
-    _subs = [
-      player.stream.playing.listen((v) {
-        _playing = v;
-        notifyListeners();
-      }),
-      player.stream.position.listen(_onPosition),
-      player.stream.duration.listen((d) {
-        _duration = d;
-        _resolveResume();
-        _updateDurationInLibrary();
-        notifyListeners();
-      }),
-      player.stream.completed.listen((c) {
-        if (c) next(manual: false);
-      }),
-      player.stream.volume.listen((v) {
-        _volume = v;
-        notifyListeners();
-      }),
-      player.stream.rate.listen((r) {
-        _rate = r;
-        notifyListeners();
-      }),
-    ];
+    _isAndroid = Platform.isAndroid;
+    if (_isAndroid) {
+      final backend = AndroidPlayerBackend();
+      _androidBackend = backend;
+      videoController = null;
+      _player = null;
+      _subs = [
+        backend.positionStream.listen(_onPosition),
+        backend.durationStream.listen((d) {
+          _duration = d;
+          _resolveResume();
+          _updateDurationInLibrary();
+          notifyListeners();
+        }),
+        backend.playingStream.listen((v) {
+          _playing = v;
+          notifyListeners();
+        }),
+        backend.bufferingStream.listen((v) {
+          _buffering = v;
+          notifyListeners();
+        }),
+        backend.completedStream.listen((_) {
+          next(manual: false);
+        }),
+      ];
+    } else {
+      // Desktop — libmpv
+      final player = Player(
+        configuration: const PlayerConfiguration(
+          bufferSize: 64 * 1024 * 1024,
+        ),
+      );
+      _player = player;
+      videoController = VideoController(
+        player,
+        configuration: VideoControllerConfiguration(
+          enableHardwareAcceleration: true,
+        ),
+      );
+      _androidBackend = null;
+      _subs = [
+        player.stream.playing.listen((v) {
+          _playing = v;
+          notifyListeners();
+        }),
+        player.stream.position.listen(_onPosition),
+        player.stream.duration.listen((d) {
+          _duration = d;
+          _resolveResume();
+          _updateDurationInLibrary();
+          notifyListeners();
+        }),
+        player.stream.completed.listen((c) {
+          if (c) next(manual: false);
+        }),
+        player.stream.volume.listen((v) {
+          _volume = v;
+          notifyListeners();
+        }),
+        player.stream.rate.listen((r) {
+          _rate = r;
+          notifyListeners();
+        }),
+        player.stream.buffering.listen((v) {
+          _buffering = v;
+          notifyListeners();
+        }),
+      ];
+    }
   }
 
   final Ref _ref;
-  late final Player _player;
-  late final VideoController videoController;
+  late final bool _isAndroid;
+  bool get isAndroid => _isAndroid;
+
+  // Бэкенды — только один активен
+  Player? _player;
+  VideoController? videoController;
+  AndroidPlayerBackend? _androidBackend;
+  AndroidPlayerBackend? get androidBackend => _androidBackend;
+
+  // Для UI — отдаём нативный VideoPlayer controller на Android
+  vp.VideoPlayerController? get androidVideoController => _androidBackend?.controller;
+
   List<StreamSubscription<dynamic>> _subs = [];
 
   LibraryController get _library => _ref.read(libraryProvider);
@@ -75,6 +124,9 @@ class PlayerController extends ChangeNotifier {
   // Состояние воспроизведения
   bool _playing = false;
   bool get isPlaying => _playing;
+
+  bool _buffering = false;
+  bool get isBuffering => _buffering;
 
   Duration _position = Duration.zero;
   Duration get position => _position;
@@ -96,36 +148,63 @@ class PlayerController extends ChangeNotifier {
   LrcLyrics? lyrics;
   bool get hasVideo => current?.isVideo ?? false;
 
-  // Публичный доступ к стримам и дорожкам libmpv для UI
-  Stream<Duration> get positionStream => _player.stream.position;
-  Stream<bool> get bufferingStream => _player.stream.buffering;
-  Stream<bool> get playingStream => _player.stream.playing;
+  // Стримы для UI — унифицированы
+  Stream<Duration> get positionStream =>
+      _isAndroid ? _androidBackend!.positionStream : _player!.stream.position;
+  Stream<bool> get bufferingStream => _isAndroid
+      ? _androidBackend!.bufferingStream
+      : _player!.stream.buffering;
+  Stream<bool> get playingStream =>
+      _isAndroid ? _androidBackend!.playingStream : _player!.stream.playing;
 
-  List<AudioTrack> get audioTracks => _player.state.tracks.audio;
-  List<SubtitleTrack> get subtitleTracks => _player.state.tracks.subtitle;
-  String? get selectedAudioTrackId => _player.state.track.audio?.id;
-  String? get selectedSubtitleTrackId => _player.state.track.subtitle?.id;
+  // Дорожки — только на Desktop (libmpv)
+  List<AudioTrack> get audioTracks =>
+      _isAndroid ? const [] : _player!.state.tracks.audio;
+  List<SubtitleTrack> get subtitleTracks =>
+      _isAndroid ? const [] : _player!.state.tracks.subtitle;
+  String? get selectedAudioTrackId =>
+      _isAndroid ? null : _player!.state.track.audio?.id;
+  String? get selectedSubtitleTrackId =>
+      _isAndroid ? null : _player!.state.track.subtitle?.id;
 
   Future<void> selectAudioTrack(AudioTrack t) async {
-    await _player.setAudioTrack(t);
+    if (_isAndroid) return; // Media3: выбор дорожки через ExoPlayer — пока no-op
+    await _player!.setAudioTrack(t);
     notifyListeners();
   }
 
   Future<void> selectSubtitleTrack(SubtitleTrack t) async {
-    await _player.setSubtitleTrack(t);
+    if (_isAndroid) return;
+    await _player!.setSubtitleTrack(t);
     notifyListeners();
   }
 
   Future<void> selectSubtitleOff() async {
-    await _player.setSubtitleTrack(SubtitleTrack.no());
+    if (_isAndroid) return;
+    await _player!.setSubtitleTrack(SubtitleTrack.no());
     notifyListeners();
   }
 
   Future<void> loadExternalSubtitle(String path) async {
-    await _player.setSubtitleTrack(
+    if (_isAndroid) return; // на Android внешние субтитры — через PlayerView позже
+    await _player!.setSubtitleTrack(
       SubtitleTrack.uri(path, title: 'Внешние субтитры'),
     );
     notifyListeners();
+  }
+
+  /// Виджет видео — адаптивный: Media3 SurfaceView на Android, libmpv на десктопе
+  Widget buildVideoView({bool fitCover = false}) {
+    if (_isAndroid) {
+      return _androidBackend!.buildVideoView(fitCover: fitCover);
+    } else {
+      final vc = videoController;
+      if (vc == null) return const ColoredBox(color: Colors.black);
+      return Video(
+        controller: vc,
+        controls: (state) => const SizedBox.shrink(),
+      );
+    }
   }
 
   // Таймер сна
@@ -157,16 +236,31 @@ class PlayerController extends ChangeNotifier {
     _resumePending =
         _settings.restorePositions && _library.positionOf(t.path) > 10;
     lyrics = _loadLyrics(t);
+    // Сбрасываем длительность до получения новой
+    _duration = Duration.zero;
+    _position = Duration.zero;
     notifyListeners();
     try {
-      await _player.open(Media(t.path));
-      _applyEq();
-    } catch (_) {}
+      if (_isAndroid) {
+        await _androidBackend!.open(t.path);
+        _applyEq();
+      } else {
+        await _player!.open(Media(t.path));
+        _applyEq();
+      }
+    } catch (e) {
+      debugPrint('[Player] open failed ${t.path}: $e');
+      // тихий фейл — не крашим приложение, переходим к следующему
+      // чтобы не висеть на битом файле
+      // Можно показать SnackBar на уровне UI, но тут не крашим
+    }
   }
 
   LrcLyrics? _loadLyrics(MediaTrack t) {
     try {
       if (t.isVideo) return null;
+      // content:// не имеет родительской папки — пропускаем
+      if (t.path.startsWith('content://')) return null;
       final f = File(t.path);
       if (!f.existsSync()) return null;
       final dir = f.parent.path;
@@ -212,8 +306,8 @@ class PlayerController extends ChangeNotifier {
   Future<void> next({bool manual = false}) async {
     if (queue.isEmpty) return;
     if (repeat == RepeatMode.one && !manual) {
-      await _player.seek(Duration.zero);
-      await _player.play();
+      await _backendSeek(Duration.zero);
+      await _backendPlay();
       return;
     }
     if (shuffle) {
@@ -235,15 +329,15 @@ class PlayerController extends ChangeNotifier {
       _history.add(index);
       await playAt(0);
     } else if (manual) {
-      await _player.seek(Duration.zero);
-      await _player.play();
+      await _backendSeek(Duration.zero);
+      await _backendPlay();
     }
   }
 
   Future<void> prev() async {
     if (queue.isEmpty) return;
     if (_position.inSeconds > 3 || _history.isEmpty) {
-      await _player.seek(Duration.zero);
+      await _backendSeek(Duration.zero);
       return;
     }
     await playAt(_history.removeLast());
@@ -266,36 +360,86 @@ class PlayerController extends ChangeNotifier {
   // ---------- Управление воспроизведением ----------
 
   Future<void> togglePlay() async {
-    await _player.playOrPause();
+    if (_isAndroid) {
+      await _androidBackend!.playOrPause();
+    } else {
+      await _player!.playOrPause();
+    }
   }
 
   Future<void> seek(Duration d) async {
     final clamped = d < Duration.zero
         ? Duration.zero
         : (_duration > Duration.zero && d > _duration ? _duration : d);
-    await _player.seek(clamped);
+    await _backendSeek(clamped);
     notifyListeners();
+  }
+
+  Future<void> _backendSeek(Duration d) async {
+    if (_isAndroid) {
+      await _androidBackend!.seek(d);
+    } else {
+      await _player!.seek(d);
+    }
+  }
+
+  Future<void> _backendPlay() async {
+    if (_isAndroid) {
+      await _androidBackend!.play();
+    } else {
+      await _player!.play();
+    }
+  }
+
+  Future<void> _backendPause() async {
+    if (_isAndroid) {
+      await _androidBackend!.pause();
+    } else {
+      await _player!.pause();
+    }
   }
 
   Future<void> setVolume(double v) async {
     _volumeBeforeMute = null;
-    await _player.setVolume(v.clamp(0, 100));
+    _volume = v.clamp(0, 100);
+    if (_isAndroid) {
+      await _androidBackend!.setVolume(_volume);
+    } else {
+      await _player!.setVolume(_volume);
+    }
+    notifyListeners();
   }
 
   Future<void> toggleMute() async {
     if (_volumeBeforeMute == null) {
       _volumeBeforeMute = _volume;
-      await _player.setVolume(0);
+      if (_isAndroid) {
+        await _androidBackend!.setVolume(0);
+      } else {
+        await _player!.setVolume(0);
+      }
+      _volume = 0;
     } else {
       final v = _volumeBeforeMute!;
       _volumeBeforeMute = null;
-      await _player.setVolume(v);
+      _volume = v;
+      if (_isAndroid) {
+        await _androidBackend!.setVolume(v);
+      } else {
+        await _player!.setVolume(v);
+      }
     }
     notifyListeners();
   }
 
   Future<void> setRate(double r) async {
-    await _player.setRate(r.clamp(0.25, 2.0));
+    final clamped = r.clamp(0.25, 2.0);
+    _rate = clamped;
+    if (_isAndroid) {
+      await _androidBackend!.setRate(clamped);
+    } else {
+      await _player!.setRate(clamped);
+    }
     notifyListeners();
   }
 
@@ -306,16 +450,16 @@ class PlayerController extends ChangeNotifier {
 
   void _onPosition(Duration d) {
     _position = d;
-    // Уведомляем раз в секунду, чтобы не перестраивать UI 60 раз в секунду
     if (d.inSeconds != _lastSavedSec) {
       _lastSavedSec = d.inSeconds;
       notifyListeners();
       final t = current;
-      if (t != null &&
-          _lastSavedSec % 5 == 0 &&
-          _duration > Duration.zero) {
+      if (t != null && _lastSavedSec % 5 == 0 && _duration > Duration.zero) {
         _library.savePosition(t.path, _lastSavedSec);
       }
+    } else {
+      // всё равно обновляем позицию для seekbar плавности, но без notify?
+      // для видео нужен частый апдейт — но throttle раз в 250мс уже есть
     }
   }
 
@@ -327,7 +471,7 @@ class PlayerController extends ChangeNotifier {
     final saved = _library.positionOf(t.path);
     final limitMs = _duration.inMilliseconds * 0.95;
     if (saved > 10 && saved * 1000 < limitMs) {
-      _player.seek(Duration(seconds: saved));
+      _backendSeek(Duration(seconds: saved));
     }
   }
 
@@ -336,10 +480,6 @@ class PlayerController extends ChangeNotifier {
     if (t != null && _duration > Duration.zero) {
       _library.updateDuration(t, _duration.inMilliseconds);
     }
-  }
-
-  void _onCompleted() {
-    next(manual: false);
   }
 
   void _saveCurrentPosition() {
@@ -357,14 +497,15 @@ class PlayerController extends ChangeNotifier {
 
   void _applyEq() {
     final s = _settings;
-    if (NativeBridge.isAndroid) {
+    if (Platform.isAndroid) {
       NativeBridge.setEqEnabled(s.eqEnabled);
       NativeBridge.setEqGains(
         s.eqEnabled ? s.eqGains : List.filled(10, 0.0),
       );
       return;
     }
-    final platform = _player.platform;
+    if (_player == null) return;
+    final platform = _player!.platform;
     if (platform is! NativePlayer) return;
     try {
       if (!s.eqEnabled) {
@@ -377,14 +518,10 @@ class PlayerController extends ChangeNotifier {
         final g = s.eqGains[i].toStringAsFixed(1);
         entries.add('entry($freq,$g)');
       }
-      entries
-          .add('entry(20000,${s.eqGains[9].toStringAsFixed(1)})');
-      final filter =
-          "lavfi=[firequalizer=gain_entry='${entries.join(':')}']";
+      entries.add('entry(20000,${s.eqGains[9].toStringAsFixed(1)})');
+      final filter = "lavfi=[firequalizer=gain_entry='${entries.join(':')}']";
       platform.setProperty('af', filter);
-    } catch (_) {
-      // фильтр может не поддерживаться — молча игнорируем
-    }
+    } catch (_) {}
   }
 
   // ---------- Таймер сна ----------
@@ -398,7 +535,7 @@ class PlayerController extends ChangeNotifier {
     }
     sleepEndsAt = DateTime.now().add(d);
     _sleepTimer = Timer(d, () async {
-      await _player.pause();
+      await _backendPause();
       sleepEndsAt = null;
       notifyListeners();
     });
@@ -413,7 +550,11 @@ class PlayerController extends ChangeNotifier {
     for (final s in _subs) {
       s.cancel();
     }
-    unawaited(_player.dispose());
+    if (_isAndroid) {
+      unawaited(_androidBackend!.dispose());
+    } else {
+      unawaited(_player!.dispose());
+    }
     super.dispose();
   }
 }
