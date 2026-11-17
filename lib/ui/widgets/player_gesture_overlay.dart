@@ -173,6 +173,8 @@ class _PanHandlerState extends State<_PanHandler> {
           final diff = -(_accY / widget.height)*_maxVol*1.5;
           final nv = (_startVol + diff).clamp(0, _maxVol);
           await NativeBridge.setVolume(nv.round());
+          // Синхронизируем и плеер, чтобы полоска снизу тоже двигалась
+          widget.player.setVolume((nv/_maxVol)*100);
           widget.onVolume(nv/_maxVol);
         }
       },

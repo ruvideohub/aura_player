@@ -17,6 +17,7 @@ import '../state/ui_state.dart';
 import '../widgets/cover_art.dart';
 import '../widgets/seekbar.dart';
 import '../widgets/player_gesture_overlay.dart';
+import '../widgets/video_thumb.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 
@@ -165,7 +166,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
               opacity: _controlsVisible ? 1 : 0,
               duration: const Duration(milliseconds: 180),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                Padding(padding: const EdgeInsets.only(bottom: 4), child: Text('Свайп ↑↓ слева — яркость, справа — громкость • двойной тап — фуллскрин', style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 10), textAlign: TextAlign.center)),
+                Padding(padding: const EdgeInsets.only(bottom: 4), child: Text('Свайп внизу — перемотка • слева яркость, справа громкость • дабл-тап края ±10с', style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 10), textAlign: TextAlign.center)),
                 if (ref.watch(fullscreenProvider))
                   Padding(padding: const EdgeInsets.only(bottom: 6), child: Center(child: FilledButton.icon(onPressed: _toggleFullscreen, icon: const Icon(Icons.fullscreen_exit_rounded, size: 18), label: const Text('Выйти из полного экрана', style: TextStyle(fontSize: 13)), style: FilledButton.styleFrom(backgroundColor: Colors.black87, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8))))),
                 GestureDetector(behavior: HitTestBehavior.translucent, onTap: () => _toggleControls(player), child: _bottomBar(context, player)),
@@ -223,11 +224,12 @@ class _VideoPageState extends ConsumerState<VideoPage> {
         Expanded(child: list.isEmpty ? Center(child: Text('Ничего не найдено', style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.5)))) : GridView.builder(gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: MediaQuery.of(context).size.width > 900 ? 3 : (MediaQuery.of(context).size.width > 600 ? 2 : 1), childAspectRatio: 1.55, mainAxisSpacing: 12, crossAxisSpacing: 12), itemCount: list.length, itemBuilder: (context, i) {
           final t = list[i];
           return Card(clipBehavior: Clip.antiAlias, child: InkWell(onTap: () => ref.read(playerProvider).open(list, i), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Expanded(child: Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [accent.withOpacity(0.85), accent.withOpacity(0.3)])), child: Stack(children: [
+            Expanded(child: Stack(children: [
+              Positioned.fill(child: VideoThumb(path: t.path)),
               Center(child: Icon(Icons.play_circle_fill_rounded, size: 48, color: Colors.white.withOpacity(0.95))),
               Positioned(bottom: 6, right: 8, child: Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(6)), child: Text(fmtTime(Duration(milliseconds: t.durationMs)), style: const TextStyle(color: Colors.white, fontSize: 11)))),
               Positioned(top: 6, left: 8, child: Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)), child: Text(t.ext.toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 10)))),
-            ]))),
+            ])),
             Padding(padding: const EdgeInsets.fromLTRB(12, 8, 12, 4), child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
             Padding(padding: const EdgeInsets.fromLTRB(12, 0, 12, 10), child: Row(children: [Expanded(child: Text(fmtSize(t.sizeBytes), style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withOpacity(0.5)), maxLines: 1, overflow: TextOverflow.ellipsis)), PopupMenuButton<String>(onSelected: (v) async { if (v == 'play') await ref.read(playerProvider).open(list, i); if (v == 'remove') lib.removeTrack(t); }, itemBuilder: (_) => const [PopupMenuItem(value: 'play', child: Text('Воспроизвести')), PopupMenuItem(value: 'remove', child: Text('Удалить'))])])),
           ])));

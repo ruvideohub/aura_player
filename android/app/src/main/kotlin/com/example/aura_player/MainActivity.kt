@@ -71,6 +71,45 @@ class MainActivity : FlutterActivity() {
                     am.setStreamVolume(AudioManager.STREAM_MUSIC, v, 0)
                     result.success(null)
                 }
+                "videoThumb" -> {
+                    val path = call.argument<String>("path")
+                    if (path != null) {
+                        // Выполняем в фоне, чтобы не блокировать UI
+                        Thread {
+                            var retriever: android.media.MediaMetadataRetriever? = null
+                            try {
+                                retriever = android.media.MediaMetadataRetriever()
+                                if (path.startsWith("content://")) {
+                                    retriever.setDataSource(applicationContext, android.net.Uri.parse(path))
+                                } else {
+                                    retriever.setDataSource(path)
+                                }
+                                // Берём кадр на 1с
+                                val bmp = retriever.getFrameAtTime(1000000, android.media.MediaMetadataRetriever.OPTION_CLOSEST)
+                                if (bmp != null) {
+                                    val stream = java.io.ByteArrayOutputStream()
+                                    // Сжимаем до 320px ширины
+                                    val w = bmp.width
+                                    val h = bmp.height
+                                    val scale = 320f / w
+                                    val nh = (h * scale).toInt()
+                                    val scaled = android.graphics.Bitmap.createScaledBitmap(bmp, 320, nh, true)
+                                    scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, stream)
+                                    val bytes = stream.toByteArray()
+                                    runOnUiThread { result.success(bytes) }
+                                    scaled.recycle()
+                                    bmp.recycle()
+                                } else {
+                                    runOnUiThread { result.success(null) }
+                                }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.success(null) }
+                            } finally {
+                                try { retriever?.release() } catch (_: Exception) {}
+                            }
+                        }.start()
+                    } else result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }

@@ -84,4 +84,11 @@ class NativeBridge {
     if (!isAndroid) return;
     try { await _channel.invokeMethod('setVolume', {'value': v}); } catch (_) {}
   }
+
+  static Future<Uint8List?> videoThumb(String path) async {
+    if (!isAndroid) return null;
+    try {
+      return await _channel.invokeMethod<Uint8List>('videoThumb', {'path': path});
+    } catch (_) { return null; }
+  }
 }
