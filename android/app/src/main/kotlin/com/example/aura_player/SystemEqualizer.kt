@@ -25,8 +25,8 @@ object SystemEqualizer {
             return
         }
         try {
-            e.enabled = on
-            bass?.enabled = on
+            e.setEnabled(on)
+            bass?.setEnabled(on)
             result.success(true)
         } catch (t: Throwable) {
             result.error("EQ_ERROR", t.message, null)
@@ -57,8 +57,8 @@ object SystemEqualizer {
     fun setBassBoost(strength: Int, result: MethodChannel.Result) {
         try {
             val b = bass ?: BassBoost(0, 0).also { bass = it }
-            b.enabled = strength > 0
-            b.strength = strength.coerceIn(0, 1000).toShort()
+            b.setEnabled(strength > 0)
+            b.setStrength(strength.coerceIn(0, 1000).toShort())
             result.success(true)
         } catch (t: Throwable) {
             result.error("EQ_ERROR", t.message, null)
