@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.util.Rational
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 /**
@@ -40,6 +41,12 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "aura.player/native")
         channel = ch
+
+        // Реальный визуализатор — EventChannel
+        try {
+            EventChannel(flutterEngine.dartExecutor.binaryMessenger, "aura.player/visualizer")
+                .setStreamHandler(VisualizerHelper)
+        } catch (_: Throwable) {}
 
         // Ловим broadcast от виджета/уведомления когда активити не в топе
         try {
@@ -170,6 +177,21 @@ class MainActivity : FlutterActivity() {
                     result.success(ok)
                 }
                 "setPipAuto" -> { result.success(true) } // заглушка, логика в Dart
+
+                // ── Визуализатор ───────────────────────────────────────
+                "initVisualizer" -> {
+                    val sid = call.argument<Number>("sessionId")?.toInt() ?: 0
+                    val ok = VisualizerHelper.setSessionId(sid)
+                    result.success(ok)
+                }
+                "setVisualizerEnabled" -> {
+                    val en = call.argument<Boolean>("enabled") ?: true
+                    VisualizerHelper.setEnabled(en)
+                    result.success(true)
+                }
+                "hasVisualizer" -> {
+                    result.success(true)
+                }
 
                 // Flutter спрашивает pending media action
                 "consumeMediaAction" -> {
