@@ -209,8 +209,12 @@ class MainActivity : FlutterActivity() {
             putExtra("title", title); putExtra("artist", artist); putExtra("isPlaying", isPlaying); putExtra("pos", pos); putExtra("dur", dur)
         }
         try {
-            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
-        } catch (_: Throwable) { try { startService(i) } catch (_: Throwable) {} }
+            if (Build.VERSION.SDK_INT >= 26) {
+                try { startForegroundService(i) } catch (_: Throwable) { startService(i) }
+            } else startService(i)
+        } catch (_: Throwable) {
+            // на некоторых прошивках без POST_NOTIFICATIONS может кинуть — игнор
+        }
     }
 
     private fun updateAudioService(title: String, artist: String, isPlaying: Boolean, pos: Long, dur: Long) {
@@ -227,12 +231,18 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun hideAudioService() {
+        // если сервис не бежит — не трогаем систему, просто обновим виджет
+        if (!AudioService.isRunning) {
+            try { AuraWidgetProvider.pushUpdate(this, "AURA Player", "Остановлено", false, 0, 0) } catch (_: Throwable) {}
+            return
+        }
         try {
             val i = Intent(this, AudioService::class.java).apply { action = AudioService.ACTION_STOP }
-            startService(i)
-            if (Build.VERSION.SDK_INT >= 26) try { startForegroundService(i) } catch (_: Throwable) {}
+            // на 14+ startForegroundService из фона может кинуть FGSNotAllowed — пробуем обычный
+            try {
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+            } catch (_: Throwable) { try { startService(i) } catch (_: Throwable) {} }
         } catch (_: Throwable) {}
-        // скрыть виджет не надо — виджет живёт отдельно, но обновим
         try { AuraWidgetProvider.pushUpdate(this, "AURA Player", "Остановлено", false, 0, 0) } catch (_: Throwable) {}
     }
 
