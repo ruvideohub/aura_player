@@ -16,6 +16,7 @@ import '../../state/player_controller.dart';
 import '../state/ui_state.dart';
 import '../widgets/cover_art.dart';
 import '../widgets/seekbar.dart';
+import '../widgets/player_gesture_overlay.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 
@@ -130,61 +131,16 @@ class _VideoPageState extends ConsumerState<VideoPage> {
       color: Colors.black,
       child: Stack(fit: StackFit.expand, children: [
         Positioned.fill(child: ColoredBox(color: Colors.black, child: player.buildVideoView())),
-        // Жесты: под панелями, translucent — панели получают приоритет. Дымка только как иконка, не затемняет видео.
-        LayoutBuilder(builder: (context, constraints) {
-          return Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: () => _toggleControls(player),
-              onDoubleTapDown: (d) {
-                final w = constraints.maxWidth;
-                final x = d.localPosition.dx;
-                if (x < w * 0.35) { player.seek(player.position - const Duration(seconds: 10)); _showControls(player); }
-                else if (x > w * 0.65) { player.seek(player.position + const Duration(seconds: 10)); _showControls(player); }
-                else { _toggleFullscreen(); }
-              },
-              // Один Pan вместо двух конкурирующих Drag — не создаёт дымку и не ломает тап
-              onPanStart: (d) {
-                _panStart = d.localPosition;
-                _isHorizontalPan = null;
-                _startBrightness = _fakeBrightness;
-                _startVolume = player.volume / 100;
-              },
-              onPanUpdate: (d) {
-                if (_panStart == null) return;
-                final dx = d.localPosition.dx - _panStart!.dx;
-                final dy = d.localPosition.dy - _panStart!.dy;
-                // Определяем направление один раз
-                _isHorizontalPan ??= dx.abs() > dy.abs();
-                if (_isHorizontalPan == true) {
-                  // Горизонталь — перемотка, без дымки
-                  final delta = Duration(milliseconds: (d.delta.dx * 90).round());
-                  player.seek(player.position + delta);
-                  _showControls(player);
-                } else {
-                  // Вертикаль — яркость/громкость только как иконка, без чёрного оверлея на видео
-                  final w = constraints.maxWidth;
-                  final h = constraints.maxHeight;
-                  final x = _panStart!.dx;
-                  final delta = -d.delta.dy / h;
-                  if (x < w * 0.33) {
-                    var v = (_brightnessOverlay ?? _startBrightness) + delta;
-                    v = v.clamp(0.0, 1.0);
-                    // Не затемняем видео, только показываем подсказку
-                    _showOverlay(brightness: v);
-                  } else if (x > w * 0.67) {
-                    var v = (player.volume / 100) + delta;
-                    v = v.clamp(0.0, 1.0);
-                    player.setVolume(v * 100);
-                    _showOverlay(volume: v);
-                  }
-                }
-              },
-              onPanEnd: (_) { _panStart = null; _isHorizontalPan = null; },
-              child: const ColoredBox(color: Colors.transparent),
-            ),
-          );
-        }),
+        // Твой Compose-оверлей — без белого, жесты под панелями
+        Positioned.fill(
+          child: PlayerGestureOverlay(
+            player: player,
+            onTap: () => _toggleControls(player),
+            onDoubleTapLeft: () { player.seek(player.position - const Duration(seconds: 10)); _showControls(player); },
+            onDoubleTapRight: () { player.seek(player.position + const Duration(seconds: 10)); _showControls(player); },
+            child: const ColoredBox(color: Colors.transparent),
+          ),
+        ),
         StreamBuilder<bool>(stream: player.bufferingStream, builder: (context, snap) {
           if (snap.data != true) return const SizedBox.shrink();
           return const Center(child: SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white)));

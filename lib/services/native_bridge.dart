@@ -59,4 +59,29 @@ class NativeBridge {
       await _channel.invokeMethod('eqSetBass', {'strength': strength});
     } catch (_) {}
   }
+
+  // Яркость / громкость — порт твоего Compose-кода без белого оверлея
+  static Future<double> getBrightness() async {
+    if (!isAndroid) return 0.5;
+    try {
+      final v = await _channel.invokeMethod<double>('getBrightness');
+      return v ?? 0.5;
+    } catch (_) { return 0.5; }
+  }
+  static Future<void> setBrightness(double v) async {
+    if (!isAndroid) return;
+    try { await _channel.invokeMethod('setBrightness', {'value': v.clamp(0.0, 1.0)}); } catch (_) {}
+  }
+  static Future<Map<String,int>> getVolume() async {
+    if (!isAndroid) return {'cur':50,'max':100};
+    try {
+      final m = await _channel.invokeMethod<Map<dynamic,dynamic>>('getVolume');
+      if (m == null) return {'cur':50,'max':100};
+      return {'cur': (m['cur'] as int), 'max': (m['max'] as int)};
+    } catch (_) { return {'cur':50,'max':100}; }
+  }
+  static Future<void> setVolume(int v) async {
+    if (!isAndroid) return;
+    try { await _channel.invokeMethod('setVolume', {'value': v}); } catch (_) {}
+  }
 }
