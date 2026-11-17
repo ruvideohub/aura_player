@@ -12,13 +12,26 @@ const videoExtensions = [
   'flv', 'mpg', 'mpeg',
 ];
 
+const streamExtensions = [
+  'm3u8', 'mpd', 'm3u', 'm4s', 'fmp4', 'ism', 'isml',
+];
+
 String _ext(String p) {
-  final i = p.lastIndexOf('.');
-  return i < 0 ? '' : p.substring(i + 1).toLowerCase();
+  // Убираем query ?... и fragment #...
+  final q = p.indexOf('?');
+  final clean = q >= 0 ? p.substring(0, q) : p;
+  final h = clean.indexOf('#');
+  final c = h >= 0 ? clean.substring(0, h) : clean;
+  final i = c.lastIndexOf('.');
+  return i < 0 ? '' : c.substring(i + 1).toLowerCase();
 }
 
 bool isAudioPath(String p) => audioExtensions.contains(_ext(p));
-bool isVideoPath(String p) => videoExtensions.contains(_ext(p));
+bool isVideoPath(String p) => videoExtensions.contains(_ext(p)) || streamExtensions.contains(_ext(p));
+bool isStreamUrl(String p) => p.startsWith('http://') || p.startsWith('https://') || p.startsWith('rtmp://') || p.startsWith('rtsp://');
+bool isHls(String p) => _ext(p) == 'm3u8' || _ext(p) == 'm3u';
+bool isDash(String p) => _ext(p) == 'mpd';
+bool isFmp4(String p) => _ext(p) == 'm4s' || _ext(p) == 'fmp4';
 
 @immutable
 class MediaTrack {
@@ -75,6 +88,36 @@ class MediaTrack {
       album: album ?? '',
       durationMs: 0,
       sizeBytes: f.lengthSync(),
+      addedAt: DateTime.now().millisecondsSinceEpoch,
+    );
+  }
+
+  factory MediaTrack.fromUrl(
+    String url, {
+    required bool isVideo,
+    String? title,
+  }) {
+    final uri = Uri.tryParse(url);
+    var name = title;
+    if (name == null || name.isEmpty) {
+      name = uri?.pathSegments.isNotEmpty == true ? uri!.pathSegments.last : url;
+      if (name.isEmpty) name = url;
+      // Убираем query
+      final q = name.indexOf('?');
+      if (q >= 0) name = name.substring(0, q);
+      if (name.length > 60) name = name.substring(0, 60);
+    }
+    // Определяем тип по расширению или эвристике
+    final e = _ext(url);
+    final videoByExt = videoExtensions.contains(e) || streamExtensions.contains(e);
+    return MediaTrack(
+      path: url,
+      isVideo: isVideo || videoByExt || isDash(url) || isHls(url),
+      title: name!,
+      artist: isStreamUrl(url) ? 'Поток' : '',
+      album: '',
+      durationMs: 0,
+      sizeBytes: 0,
       addedAt: DateTime.now().millisecondsSinceEpoch,
     );
   }
