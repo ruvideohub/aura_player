@@ -96,7 +96,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   }
 
   Future<void> _openVideo() async {
-    const typeGroup = XTypeGroup(label: 'Видео', extensions: videoExtensions);
+    const typeGroup = XTypeGroup(label: 'Видео', extensions: [...videoExtensions, ...streamExtensions]);
     try {
       final files = await openFiles(acceptedTypeGroups: [typeGroup]);
       if (files.isEmpty) return;
@@ -106,6 +106,35 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
     }
+  }
+
+  Future<void> _openStream() async {
+    final ctrl = TextEditingController();
+    final url = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Открыть поток'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Поддерживает HLS (.m3u8), DASH (.mpd), fMP4 (.m4s), RTMP/RTSP', style: TextStyle(fontSize: 12)),
+          const SizedBox(height: 12),
+          TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(hintText: 'https://example.com/stream.m3u8', prefixIcon: Icon(Icons.link_rounded)), onSubmitted: (v) => Navigator.pop(ctx, v)),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Открыть')),
+        ],
+      ),
+    );
+    if (url == null || url.trim().isEmpty) return;
+    final u = url.trim();
+    if (!isStreamUrl(u) && !streamExtensions.contains(extOf(u)) && !u.contains('.m3u8') && !u.contains('.mpd')) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Вставь http(s) ссылку на поток')));
+      return;
+    }
+    final track = MediaTrack.fromUrl(u, isVideo: true);
+    ref.read(libraryProvider).importTracks([track]);
+    await ref.read(playerProvider).open([track], 0);
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Открываю: ${track.title}')));
   }
 
   @override
@@ -200,6 +229,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
           const SizedBox(height: 20),
           Wrap(spacing: 12, alignment: WrapAlignment.center, children: [
             FilledButton.icon(onPressed: _openVideo, icon: const Icon(Icons.folder_open_rounded), label: const Text('Открыть видео')),
+            FilledButton.icon(onPressed: _openStream, icon: const Icon(Icons.stream_rounded), label: const Text('Открыть поток'), style: FilledButton.styleFrom(backgroundColor: theme.colorScheme.secondary)),
             OutlinedButton.icon(onPressed: () async { final m = ScaffoldMessenger.of(context); await lib.scan(); m.showSnackBar(SnackBar(content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded}'))); }, icon: lib.scanning ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh_rounded), label: Text(lib.scanning ? 'Сканирую...' : 'Сканировать')),
             TextButton(onPressed: () => ref.read(pageProvider.notifier).state = 4, child: const Text('Настройки')),
           ]),
@@ -216,6 +246,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
           DropdownButton<String>(value: _sort, underline: const SizedBox.shrink(), borderRadius: BorderRadius.circular(12), items: const [DropdownMenuItem(value: 'date', child: Text('По дате')), DropdownMenuItem(value: 'title', child: Text('По названию')), DropdownMenuItem(value: 'duration', child: Text('По длительности'))], onChanged: (v) => setState(() => _sort = v ?? 'date')),
           const SizedBox(width: 8),
           IconButton(tooltip: 'Открыть файлы', onPressed: _openVideo, icon: const Icon(Icons.add_rounded)),
+          IconButton(tooltip: 'Открыть поток (HLS/DASH/fMP4)', onPressed: _openStream, icon: const Icon(Icons.stream_rounded)),
           IconButton(tooltip: 'Сканировать', onPressed: lib.scanning ? null : () async { final m = ScaffoldMessenger.of(context); await lib.scan(); m.showSnackBar(SnackBar(content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded}'))); }, icon: lib.scanning ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh_rounded)),
         ]),
         const SizedBox(height: 8),
