@@ -16,26 +16,32 @@ jobs:
           java-version: '17'
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.35.3'
           channel: stable
+          cache: true
+      - run: flutter doctor -v
       - run: flutter pub get
-      - run: flutter build apk --release
+      - run: flutter build apk --release --verbose
       - uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
 
   windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.35.3'
           channel: stable
+          cache: true
+      - run: flutter doctor -v
       - run: flutter pub get
-      - run: flutter build windows --release
+      - run: flutter build windows --release --verbose
       - uses: actions/upload-artifact@v4
         with:
           name: windows-release
           path: build/windows/x64/runner/Release/
+          if-no-files-found: error
