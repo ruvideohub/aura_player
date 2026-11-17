@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/theme.dart';
 import '../../services/library.dart';
@@ -21,6 +22,8 @@ class SettingsPage extends ConsumerStatefulWidget {
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   Timer? _clock;
   int _sleepMinutes = 0;
+  bool _checkingPerms = false;
+  String _permStatus = '';
 
   @override
   void initState() {
@@ -30,6 +33,70 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         setState(() {});
       }
     });
+    _refreshPermissionStatus();
+  }
+
+  Future<void> _refreshPermissionStatus() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final audio = await Permission.audio.status;
+      final video = await Permission.videos.status;
+      final storage = await Permission.storage.status;
+      setState(() {
+        _permStatus = 'Аудио: ${audio.name} • Видео: ${video.name} • Хранилище: ${storage.name}';
+      });
+    } catch (_) {
+      setState(() => _permStatus = 'не удалось проверить');
+    }
+  }
+
+  Future<bool> _requestPermissions() async {
+    setState(() => _checkingPerms = true);
+    try {
+      // На Android 13+ запрашиваем медиа-разрешения, на старых — storage
+      final perms = <Permission>[];
+      // permission_handler мапит разрешения под разные SDK
+      perms.add(Permission.storage);
+      try {
+        perms.add(Permission.audio);
+        perms.add(Permission.videos);
+        perms.add(Permission.photos);
+      } catch (_) {}
+      
+      final results = await perms.request();
+      await _refreshPermissionStatus();
+      
+      final granted = results.values.any((s) => s.isGranted || s.isLimited);
+      if (!granted) {
+        final denied = results.values.any((s) => s.isPermanentlyDenied);
+        if (denied && mounted) {
+          _showPermDialog();
+        }
+      }
+      return granted;
+    } finally {
+      setState(() => _checkingPerms = false);
+    }
+  }
+
+  void _showPermDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Разрешения не даны'),
+        content: const Text('Без разрешений AURA не видит файлы. Открой настройки и включи доступ к музыке и видео.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              openAppSettings();
+            },
+            child: const Text('Открыть настройки'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -54,6 +121,92 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // ---- Разрешения Android ----
+              if (Platform.isAndroid)
+                _card(
+                  theme,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _sectionTitle(theme, Icons.security_rounded, 'Разрешения'),
+                      const SizedBox(height: 8),
+                      Text(
+                        'AURA нужен доступ к файлам, чтобы найти музыку и видео.',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: theme.colorScheme.onSurface.withOpacity(0.65),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primary.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: theme.dividerColor),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline_rounded, size: 18, color: accent),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _permStatus.isEmpty ? 'проверка...' : _permStatus,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          FilledButton.icon(
+                            onPressed: _checkingPerms ? null : () async {
+                              final ok = await _requestPermissions();
+                              if (ok && mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Разрешения получены — можно сканировать')),
+                                );
+                              }
+                            },
+                            icon: _checkingPerms
+                                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.verified_user_outlined, size: 18),
+                            label: const Text('Запросить доступ'),
+                          ),
+                          const SizedBox(width: 12),
+                          OutlinedButton.icon(
+                            onPressed: () => openAppSettings(),
+                            icon: const Icon(Icons.settings_outlined, size: 18),
+                            label: const Text('Настройки системы'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextButton.icon(
+                        onPressed: _checkingPerms ? null : () async {
+                          final messenger = ScaffoldMessenger.of(context);
+                          final l = ref.read(libraryProvider);
+                          // Перед сканом ещё раз проверяем права
+                          final ok = await _requestPermissions();
+                          if (!ok) {
+                            messenger.showSnackBar(const SnackBar(content: Text('Сначала дай разрешения')));
+                            return;
+                          }
+                          await l.scan();
+                          messenger.showSnackBar(SnackBar(
+                            content: Text(l.lastScanError != null ? 'Ошибка: ${l.lastScanError}' : 'Добавлено ${l.lastScanAdded} файлов'),
+                          ));
+                        },
+                        icon: lib.scanning ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh_rounded, size: 18),
+                        label: Text(lib.scanning ? 'Сканирование...' : 'Сканировать сейчас (${lib.audio.length + lib.video.length} файлов)'),
+                      ),
+                    ],
+                  ),
+                ),
+              if (Platform.isAndroid) const SizedBox(height: 16),
+
               // ---- Внешний вид ----
               _card(
                 theme,
@@ -286,14 +439,42 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     _sectionTitle(theme, Icons.folder_outlined, 'Библиотека'),
                     const SizedBox(height: 8),
                     if (NativeBridge.isAndroid)
-                      Text(
-                        'На Android библиотека сканируется через MediaStore '
-                        '— все музыка и видео на устройстве.',
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          color:
-                              theme.colorScheme.onSurface.withOpacity(0.55),
-                        ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'На Android музыка и видео берутся из MediaStore. '
+                            'Если список пустой — дай разрешения и нажми «Сканировать».',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: theme.colorScheme.onSurface.withOpacity(0.55),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              FilledButton.icon(
+                                onPressed: lib.scanning ? null : () async {
+                                  final messenger = ScaffoldMessenger.of(context);
+                                  final ok = await _requestPermissions();
+                                  if (!ok) {
+                                    messenger.showSnackBar(const SnackBar(content: Text('Нужны разрешения')));
+                                    return;
+                                  }
+                                  await ref.read(libraryProvider).scan();
+                                  final l = ref.read(libraryProvider);
+                                  messenger.showSnackBar(SnackBar(
+                                    content: Text(l.lastScanError != null ? 'Ошибка: ${l.lastScanError}' : 'Добавлено ${l.lastScanAdded} файлов'),
+                                  ));
+                                },
+                                icon: lib.scanning ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.refresh_rounded, size: 18),
+                                label: Text(lib.scanning ? 'Сканирую...' : 'Сканировать MediaStore'),
+                              ),
+                              const SizedBox(width: 12),
+                              Text('${lib.audio.length} аудио • ${lib.video.length} видео', style: const TextStyle(fontSize: 12)),
+                            ],
+                          ),
+                        ],
                       )
                     else ...[
                       if (settings.scanDirs.isEmpty)
@@ -391,7 +572,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Интерфейс: Flutter Material 3 · Состояние: Riverpod\n'
+                      'Интерфейс: Flutter Material 3 • Состояние: Riverpod\n'
                       'Движок: libmpv через media_kit (все форматы, субтитры, EQ)\n'
                       'Android: Kotlin — MediaStore, обложки, audiofx-эквалайзер\n'
                       'Горячие клавиши: Space, стрелки, M, F, N, P, L, S, [ и ]',

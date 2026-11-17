@@ -5,6 +5,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../models/models.dart';
@@ -37,10 +38,61 @@ class _AppShellState extends ConsumerState<AppShell> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(libraryProvider).load();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Загружаем библиотеку
+      await ref.read(libraryProvider).load();
+      // Применяем эквалайзер
       ref.read(playerProvider).applyEqualizer();
+      // Автозапрос разрешений и скан на Android
+      if (! _isDesktop && mounted) {
+        await _ensureAndroidPermissionsAndScan();
+      }
     });
+  }
+
+  Future<void> _ensureAndroidPermissionsAndScan() async {
+    try {
+      // Проверяем, нужна ли нам проверка разрешений
+      final lib = ref.read(libraryProvider);
+      // Если библиотека пустая — пробуем запросить разрешения и отсканировать
+      if (lib.audio.isEmpty && lib.video.isEmpty) {
+        final hasPermission = await _requestMediaPermissions(showRationale: false);
+        if (hasPermission) {
+          await lib.scan();
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<bool> _requestMediaPermissions({bool showRationale = true}) async {
+    try {
+      if (_isDesktop) return true;
+      
+      // Android 13+ : READ_MEDIA_AUDIO / READ_MEDIA_VIDEO
+      // Android <13 : READ_EXTERNAL_STORAGE
+      // permission_handler мапит их на Permission.storage / photos / videos
+      List<Permission> toRequest = [];
+      
+      if (Platform.isAndroid) {
+        // Пробуем запросить все возможные
+        // На Android 13+ нужны photos/videos, на старых - storage
+        toRequest = [Permission.storage];
+        // На новых версиях также запрашиваем audio/photos
+        // permission_handler 11+ поддерживает .audio, .videos
+        try {
+          toRequest.add(Permission.audio);
+          toRequest.add(Permission.videos);
+          toRequest.add(Permission.photos);
+        } catch (_) {}
+      }
+      
+      final statuses = await toRequest.request();
+      // Считаем что хотя бы одно разрешение получено
+      final granted = statuses.values.any((s) => s.isGranted || s.isLimited);
+      return granted;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
@@ -84,8 +136,6 @@ class _AppShellState extends ConsumerState<AppShell> {
     if (ctx == null) return false;
     final w = ctx.widget;
     if (w is EditableText) return true;
-    // Простая эвристика: если фокус внутри EditableText, он уже пойман выше.
-    // Глубокий обход родителей требует Element API; для хоткеев достаточно проверки виджета.
     return false;
   }
 
@@ -167,93 +217,138 @@ class _AppShellState extends ConsumerState<AppShell> {
     final pageIndex = ref.watch(pageProvider);
     final fullscreen = ref.watch(fullscreenProvider);
     final player = ref.watch(playerProvider);
-    final wide = MediaQuery.of(context).size.width >= 980;
+    // Стабильный wide без дёрганий: используем LayoutBuilder
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 980;
+        final showMiniPlayer = _shouldShowMiniPlayer(pageIndex, player, fullscreen);
 
-    // Автопереход на вкладку видео при воспроизведении видео
-    ref.listen(playerProvider.select((p) => p.hasVideo), (prev, next) {
-      if (next && !fullscreen) {
-        ref.read(pageProvider.notifier).state = 1;
-      }
-    });
+        // Автопереход на вкладку видео при воспроизведении видео
+        ref.listen(playerProvider.select((p) => p.hasVideo), (prev, next) {
+          if (next && !fullscreen) {
+            ref.read(pageProvider.notifier).state = 1;
+          }
+        });
 
-    final pages = IndexedStack(
-      index: pageIndex,
-      children: const [
-        AudioPage(),
-        VideoPage(),
-        LibraryPage(),
-        PlaylistsPage(),
-        EqualizerPage(),
-        SettingsPage(),
-      ],
-    );
+        final pages = IndexedStack(
+          index: pageIndex,
+          children: const [
+            AudioPage(),
+            VideoPage(),
+            LibraryPage(),
+            PlaylistsPage(),
+            EqualizerPage(),
+            SettingsPage(),
+          ],
+        );
 
-    Widget content;
-    if (fullscreen) {
-      content = pages;
-    } else {
-      content = Row(
-        children: [
-          if (wide) _Sidebar(selected: pageIndex),
-          Expanded(child: pages),
-        ],
-      );
-    }
+        Widget content;
+        if (fullscreen) {
+          content = pages;
+        } else {
+          content = Row(
+            children: [
+              if (wide) _Sidebar(selected: pageIndex),
+              Expanded(child: pages),
+            ],
+          );
+        }
 
-    Widget shell = Column(
-      children: [
-        if (!fullscreen && _isDesktop) _TitleBar(onPickFiles: _pickFiles),
-        Expanded(child: content),
-        if (!fullscreen && player.current != null)
-          _MiniPlayer(
-            compact: !wide,
-            onOpenPlayer: () {
-              ref.read(pageProvider.notifier).state =
-                  player.hasVideo ? 1 : 0;
-            },
-          ),
-        if (!fullscreen && !wide)
-          _MobileNav(selected: pageIndex),
-      ],
-    );
+        // Основная колонка с фиксированными высотами (не скачет)
+        Widget shell = Column(
+          children: [
+            if (!fullscreen && _isDesktop) _TitleBar(onPickFiles: _pickFiles),
+            Expanded(child: content),
+            // Мини-плеер только на второстепенных вкладках (исправлено дублирование)
+            if (showMiniPlayer)
+              SizedBox(
+                height: 76,
+                child: _MiniPlayer(
+                  compact: !wide,
+                  onOpenPlayer: () {
+                    ref.read(pageProvider.notifier).state =
+                        player.hasVideo ? 1 : 0;
+                  },
+                ),
+              ),
+            // Мобильная навигация с фиксированной высотой (не скачет)
+            if (!fullscreen && !wide)
+              SizedBox(
+                height: 80,
+                child: _MobileNav(selected: pageIndex),
+              ),
+          ],
+        );
 
-    shell = DropTarget(
-      onDragDone: (d) => _openDropped(d.files.map((f) => f.path).toList()),
-      onDragEntered: (_) => setState(() => _dragOver = true),
-      onDragExited: (_) => setState(() => _dragOver = false),
-      child: Stack(
-        children: [
-          Positioned.fill(child: shell),
-          if (_dragOver)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: Container(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .primary
-                      .withOpacity(0.10),
-                  child: Center(
-                    child: Icon(
-                      Icons.add_circle_outline_rounded,
-                      size: 72,
-                      color: Theme.of(context).colorScheme.primary,
+        // Drag & Drop
+        shell = DropTarget(
+          onDragDone: (d) => _openDropped(d.files.map((f) => f.path).toList()),
+          onDragEntered: (_) => setState(() => _dragOver = true),
+          onDragExited: (_) => setState(() => _dragOver = false),
+          child: Stack(
+            children: [
+              Positioned.fill(child: shell),
+              if (_dragOver)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Container(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withOpacity(0.10),
+                      child: Center(
+                        child: Icon(
+                          Icons.add_circle_outline_rounded,
+                          size: 72,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ),
-        ],
-      ),
-    );
+            ],
+          ),
+        );
 
-    return Scaffold(
-      body: Focus(
-        focusNode: _shortcutFocus,
-        autofocus: true,
-        onKeyEvent: _onKey,
-        child: shell,
-      ),
+        // SafeArea для статус-бара на Android (фикс отступов)
+        final scaffold = Scaffold(
+          body: SafeArea(
+            top: !_isDesktop, // на Android/iOS учитываем статус-бар
+            bottom: false, // низ обрабатываем сами (навбар)
+            child: Focus(
+              focusNode: _shortcutFocus,
+              autofocus: true,
+              onKeyEvent: _onKey,
+              child: shell,
+            ),
+          ),
+        );
+
+        // На десктопе без SafeArea (там свой тайтлбар)
+        if (_isDesktop) {
+          return Scaffold(
+            body: Focus(
+              focusNode: _shortcutFocus,
+              autofocus: true,
+              onKeyEvent: _onKey,
+              child: shell,
+            ),
+          );
+        }
+        return scaffold;
+      },
     );
+  }
+
+  // Логика показа мини-плеера: не показываем его на полноэкранных плеерах
+  bool _shouldShowMiniPlayer(int pageIndex, PlayerController player, bool fullscreen) {
+    if (fullscreen) return false;
+    if (player.current == null) return false;
+    // Если сейчас открыт полноэкранный плеер (Аудио или Видео) — мини не нужен (дублирование)
+    if (pageIndex == 0 && !player.hasVideo) return false; // на странице Музыка уже есть большой плеер
+    if (pageIndex == 1 && player.hasVideo) return false; // на странице Видео уже есть плеер
+    // На остальных вкладках (библиотека, плейлисты, EQ, настройки) показываем мини
+    return true;
   }
 }
 
@@ -677,7 +772,7 @@ class _PlayButton extends ConsumerWidget {
   }
 }
 
-// ---------------- Мобильная навигация ----------------
+// ---------------- Мобильная навигация (фикс скачков) ----------------
 
 class _MobileNav extends ConsumerWidget {
   final int selected;
@@ -694,17 +789,25 @@ class _MobileNav extends ConsumerWidget {
       (4, Icons.equalizer_rounded, 'Эквалайзер'),
       (5, Icons.settings_outlined, 'Настройки'),
     ];
-    return NavigationBar(
-      selectedIndex: selected,
-      onDestinationSelected: (i) =>
-          ref.read(pageProvider.notifier).state = i,
-      destinations: [
-        for (final item in items)
-          NavigationDestination(
-            icon: Icon(item.$2),
-            label: item.$3,
-          ),
-      ],
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+      ),
+      child: NavigationBar(
+        height: 80,
+        selectedIndex: selected,
+        onDestinationSelected: (i) =>
+            ref.read(pageProvider.notifier).state = i,
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        destinations: [
+          for (final item in items)
+            NavigationDestination(
+              icon: Icon(item.$2),
+              selectedIcon: Icon(item.$2, color: Theme.of(context).colorScheme.primary),
+              label: item.$3,
+            ),
+        ],
+      ),
     );
   }
 }

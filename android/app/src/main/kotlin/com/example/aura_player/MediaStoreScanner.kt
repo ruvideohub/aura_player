@@ -1,5 +1,6 @@
 package com.example.aura_player
 
+import android.content.ContentUris
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.os.Handler
@@ -9,7 +10,7 @@ import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
 
 /// Скан музыки и видео на устройстве через MediaStore + извлечение обложек.
-/// Запросы выполняются в фоновом потоке, результат доставляется в main-поток.
+/// Исправлено для Android 10+ (scoped storage): используем content:// URIs
 object MediaStoreScanner {
 
     private val executor = Executors.newSingleThreadExecutor()
@@ -32,7 +33,13 @@ object MediaStoreScanner {
         executor.execute {
             val retriever = MediaMetadataRetriever()
             try {
-                retriever.setDataSource(path)
+                // Поддержка как file:// так и content://
+                if (path.startsWith("content://")) {
+                    val uri = android.net.Uri.parse(path)
+                    retriever.setDataSource(context, uri)
+                } else {
+                    retriever.setDataSource(path)
+                }
                 val bytes = retriever.embeddedPicture
                 main.post { result.success(bytes) }
             } catch (t: Throwable) {
@@ -51,6 +58,7 @@ object MediaStoreScanner {
         val collection =
             MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
         val projection = arrayOf(
+            MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.ALBUM,
@@ -66,17 +74,25 @@ object MediaStoreScanner {
             null,
             "${MediaStore.Audio.Media.DATE_ADDED} DESC",
         )?.use { c ->
+            val idIndex = c.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+            val dataIndex = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
             while (c.moveToNext()) {
-                val path = c.getStringOrNull(3) ?: continue
+                val id = c.getLong(idIndex)
+                // Приоритет: content:// URI (работает на Android 10+), fallback на DATA
+                val filePath = c.getStringOrNull(dataIndex)
+                val contentUri = ContentUris.withAppendedId(collection, id).toString()
+                // Используем filePath если он есть и файл существует, иначе contentUri
+                val path = if (!filePath.isNullOrEmpty() && java.io.File(filePath).exists()) filePath else contentUri
+                
                 out.add(
                     mapOf(
                         "path" to path,
-                        "title" to (c.getStringOrNull(0) ?: ""),
-                        "artist" to (c.getStringOrNull(1) ?: ""),
-                        "album" to (c.getStringOrNull(2) ?: ""),
-                        "durationMs" to (c.getLongOrNull(4) ?: 0L),
-                        "sizeBytes" to (c.getLongOrNull(5) ?: 0L),
-                        "addedAt" to ((c.getLongOrNull(6) ?: 0L) * 1000L),
+                        "title" to (c.getStringOrNull(c.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)) ?: ""),
+                        "artist" to (c.getStringOrNull(c.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)) ?: ""),
+                        "album" to (c.getStringOrNull(c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)) ?: ""),
+                        "durationMs" to (c.getLongOrNull(c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)) ?: 0L),
+                        "sizeBytes" to (c.getLongOrNull(c.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)) ?: 0L),
+                        "addedAt" to ((c.getLongOrNull(c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)) ?: 0L) * 1000L),
                         "isVideo" to false,
                     )
                 )
@@ -90,6 +106,7 @@ object MediaStoreScanner {
         val collection =
             MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
         val projection = arrayOf(
+            MediaStore.Video.Media._ID,
             MediaStore.Video.Media.TITLE,
             MediaStore.Video.Media.DATA,
             MediaStore.Video.Media.DURATION,
@@ -103,17 +120,23 @@ object MediaStoreScanner {
             null,
             "${MediaStore.Video.Media.DATE_ADDED} DESC",
         )?.use { c ->
+            val idIndex = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+            val dataIndex = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
             while (c.moveToNext()) {
-                val path = c.getStringOrNull(1) ?: continue
+                val id = c.getLong(idIndex)
+                val filePath = c.getStringOrNull(dataIndex)
+                val contentUri = ContentUris.withAppendedId(collection, id).toString()
+                val path = if (!filePath.isNullOrEmpty() && java.io.File(filePath).exists()) filePath else contentUri
+                
                 out.add(
                     mapOf(
                         "path" to path,
-                        "title" to (c.getStringOrNull(0) ?: ""),
+                        "title" to (c.getStringOrNull(c.getColumnIndexOrThrow(MediaStore.Video.Media.TITLE)) ?: ""),
                         "artist" to "",
                         "album" to "",
-                        "durationMs" to (c.getLongOrNull(2) ?: 0L),
-                        "sizeBytes" to (c.getLongOrNull(3) ?: 0L),
-                        "addedAt" to ((c.getLongOrNull(4) ?: 0L) * 1000L),
+                        "durationMs" to (c.getLongOrNull(c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)) ?: 0L),
+                        "sizeBytes" to (c.getLongOrNull(c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)) ?: 0L),
+                        "addedAt" to ((c.getLongOrNull(c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)) ?: 0L) * 1000L),
                         "isVideo" to true,
                     )
                 )

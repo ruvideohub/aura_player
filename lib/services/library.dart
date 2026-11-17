@@ -74,8 +74,23 @@ class LibraryController extends ChangeNotifier {
       }
       notifyListeners();
       _pruneMissing();
+      // Автозапуск скана если библиотека пустая (первый запуск)
+      if (audio.isEmpty && video.isEmpty && !scanning) {
+        // Не делаем скан автоматически здесь — оставим это AppShell после проверки разрешений
+        // Но на десктопе с настроенными папками можно попробовать
+        if (!NativeBridge.isAndroid && _settings.scanDirs.isNotEmpty) {
+          Future.delayed(const Duration(milliseconds: 500), () => scan());
+        }
+      }
     } catch (_) {
       // первая загрузка или недоступное хранилище
+    }
+  }
+
+  // Явный автозапуск для Android после получения разрешений
+  Future<void> ensureScanned() async {
+    if (audio.isEmpty && video.isEmpty && !scanning) {
+      await scan();
     }
   }
 
