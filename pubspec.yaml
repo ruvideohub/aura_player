@@ -1,7 +1,7 @@
 name: aura_player
 description: AURA Player — красивый аудио и видео плеер на Flutter + Kotlin.
 publish_to: "none"
-version: 2.0.0+7
+version: 2.0.0+8
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -24,7 +24,7 @@ dependencies:
 
   # Жесты видео: яркость/громкость на Android
   screen_brightness: ^0.2.2
-  volume_controller: ^2.3.0
+  volume_controller: ^2.0.8
 
   # Оконный режим и кастомный тайтлбар (Windows/Linux/macOS)
   window_manager: ^0.4.3
