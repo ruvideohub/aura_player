@@ -26,7 +26,9 @@ class LibraryController extends ChangeNotifier {
   final Map<String, int> positions = {}; // путь -> секунды
 
   bool scanning = false;
+  double scanProgress = 0.0; // 0..1 для прогресс-бара
   int lastScanAdded = 0;
+  int lastScanRemoved = 0;
   String? lastScanError;
 
   File? _libraryFile;
@@ -139,8 +141,10 @@ class LibraryController extends ChangeNotifier {
   Future<int> scan() async {
     if (scanning) return 0;
     scanning = true;
+    scanProgress = 0.0;
     lastScanError = null;
     lastScanAdded = 0;
+    lastScanRemoved = 0;
     notifyListeners();
 
     var added = 0;
@@ -148,16 +152,47 @@ class LibraryController extends ChangeNotifier {
       if (NativeBridge.isAndroid) {
         added = await _scanAndroid();
       } else {
-        for (final dirPath in _settings.scanDirs) {
-          added += await _scanDirectory(Directory(dirPath));
+        // Сканирование в изоляте чтобы не фризить UI на 10k файлов (P1)
+        final dirs = _settings.scanDirs.where((d) => d.isNotEmpty).toList();
+        if (dirs.isNotEmpty) {
+          // Прогресс: 0.2 пока изолирован, 1.0 после
+          scanProgress = 0.2;
+          notifyListeners();
+          final maps = await compute(_scanDirsIsolate, dirs);
+          for (final m in maps) {
+            final path = m['path'] as String;
+            if (_known(path)) continue;
+            final t = MediaTrack(
+              path: path,
+              isVideo: m['isVideo'] as bool,
+              title: m['title'] as String,
+              artist: m['artist'] as String,
+              album: m['album'] as String,
+              durationMs: 0,
+              sizeBytes: m['sizeBytes'] as int? ?? 0,
+              addedAt: m['addedAt'] as int? ?? DateTime.now().millisecondsSinceEpoch,
+            );
+            if (t.isVideo) video.add(t); else audio.add(t);
+            added++;
+          }
+          scanProgress = 0.8;
+          notifyListeners();
+          // Удаляем пропавшие файлы (как на Android)
+          final before = audio.length + video.length;
+          _pruneMissing();
+          lastScanRemoved = before - (audio.length + video.length) - added;
+          if (lastScanRemoved < 0) lastScanRemoved = 0;
         }
       }
       lastScanAdded = added;
+      scanProgress = 1.0;
+      notifyListeners();
       await _persistLibrary();
     } catch (e) {
       lastScanError = '$e';
     } finally {
       scanning = false;
+      scanProgress = 0.0;
       notifyListeners();
     }
     return added;
@@ -167,9 +202,11 @@ class LibraryController extends ChangeNotifier {
     final items = await NativeBridge.scanMedia();
     var added = 0;
     final now = DateTime.now().millisecondsSinceEpoch;
+    final scannedPaths = <String>{};
     for (final it in items) {
       final path = it['path'] as String?;
       if (path == null || path.isEmpty) continue;
+      scannedPaths.add(path);
       if (_known(path)) continue;
       final isVideo = it['isVideo'] as bool? ?? false;
       final t = MediaTrack(
@@ -187,6 +224,13 @@ class LibraryController extends ChangeNotifier {
       (isVideo ? video : audio).add(t);
       added++;
     }
+    // Инкрементальный прун: удаляем то что есть в библиотеке но нет в MediaStore
+    final before = audio.length + video.length;
+    audio.removeWhere((t) => !scannedPaths.contains(t.path));
+    video.removeWhere((t) => !scannedPaths.contains(t.path));
+    lastScanRemoved = before - (audio.length + video.length) - added;
+    if (lastScanRemoved < 0) lastScanRemoved = 0;
+    if (lastScanRemoved > 0) await _persistLibrary();
     return added;
   }
 
@@ -443,6 +487,70 @@ class LibraryController extends ChangeNotifier {
   void dispose() {
     _settings.removeListener(_onSettingsChanged);
     super.dispose();
+  }
+}
+
+/// Топ-уровневая функция для изолята — сканирует папки без блокировки UI
+List<Map<String, dynamic>> _scanDirsIsolate(List<String> dirs) {
+  final out = <Map<String, dynamic>>[];
+  for (final d in dirs) {
+    final dir = Directory(d);
+    if (!dir.existsSync()) continue;
+    _scanDirSync(dir, out);
+  }
+  return out;
+}
+
+void _scanDirSync(Directory dir, List<Map<String, dynamic>> out) {
+  final name = dir.path.split(Platform.pathSeparator).last;
+  if (name.startsWith('.')) return;
+  List<FileSystemEntity> entries;
+  try {
+    entries = dir.listSync(followLinks: false);
+  } catch (_) { return; }
+  for (final e in entries) {
+    if (e is Directory) {
+      _scanDirSync(e, out);
+      continue;
+    }
+    if (e is! File) continue;
+    final p = e.path;
+    final ext = p.split('.').last.toLowerCase();
+    final isAudio = audioExtensions.contains(ext);
+    final isVideo = videoExtensions.contains(ext);
+    if (!isAudio && !isVideo) continue;
+    try {
+      final f = File(p);
+      final stat = f.statSync();
+      final seg = f.uri.pathSegments.isNotEmpty ? f.uri.pathSegments.last : p.split(Platform.pathSeparator).last;
+      final dot = seg.lastIndexOf('.');
+      var title = (dot < 0 ? seg : seg.substring(0, dot)).replaceAll('_', ' ').trim();
+      String artist = '';
+      final dash = title.indexOf(' - ');
+      if (dash > 0) {
+        artist = title.substring(0, dash).trim();
+        title = title.substring(dash + 3).trim();
+      }
+      // ID3 в изоляте — пробуем, но не критично
+      if (isAudio) {
+        try {
+          final tags = readId3Tags(p);
+          if (tags != null) {
+            if (tags.title?.isNotEmpty == true) title = tags.title!;
+            if (tags.artist?.isNotEmpty == true) artist = tags.artist!;
+          }
+        } catch (_) {}
+      }
+      out.add({
+        'path': p,
+        'isVideo': isVideo,
+        'title': title.isEmpty ? seg : title,
+        'artist': artist,
+        'album': '',
+        'sizeBytes': stat.size,
+        'addedAt': stat.modified.millisecondsSinceEpoch,
+      });
+    } catch (_) {}
   }
 }
 

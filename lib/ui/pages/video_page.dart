@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:screen_brightness/screen_brightness.dart';
+import 'package:volume_controller/volume_controller.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../core/formatters.dart';
@@ -28,11 +30,62 @@ class VideoPage extends ConsumerStatefulWidget {
 class _VideoPageState extends ConsumerState<VideoPage> {
   bool _controlsVisible = true;
   Timer? _hideTimer;
+  double? _brightnessOverlay; // 0..1 слева
+  double? _volumeOverlay; // 0..1 справа
+  Timer? _overlayTimer;
+  double _startBrightness = 0.5;
+  double _startVolume = 0.5;
   String _query = '';
   String _sort = 'date';
 
   @override
-  void dispose() { _hideTimer?.cancel(); super.dispose(); }
+  void dispose() { _hideTimer?.cancel(); _overlayTimer?.cancel(); super.dispose(); }
+
+  void _showOverlay({double? brightness, double? volume}) {
+    setState(() {
+      if (brightness != null) _brightnessOverlay = brightness;
+      if (volume != null) _volumeOverlay = volume;
+    });
+    _overlayTimer?.cancel();
+    _overlayTimer = Timer(const Duration(milliseconds: 900), () {
+      if (mounted) setState(() { _brightnessOverlay = null; _volumeOverlay = null; });
+    });
+  }
+
+  Future<void> _onVerticalDragStart(DragStartDetails d, BoxConstraints c) async {
+    final w = c.maxWidth;
+    final x = d.localPosition.dx;
+    // Запоминаем стартовые значения
+    try { _startBrightness = await ScreenBrightness().current; } catch (_) { _startBrightness = 0.5; }
+    try { _startVolume = await VolumeController.instance.getVolume(); } catch (_) { _startVolume = 0.5; }
+    // x в левой трети — яркость, правой — громкость
+    // центр — ничего
+  }
+
+  Future<void> _onVerticalDragUpdate(DragUpdateDetails d, BoxConstraints c) async {
+    final w = c.maxWidth;
+    final h = c.maxHeight;
+    final x = d.localPosition.dx;
+    final dy = d.delta.dy;
+    // Чувствительность: весь свайп по высоте = 1.0
+    final delta = -dy / h; // вверх = увеличить
+    if (x < w * 0.33) {
+      // Яркость
+      var v = (_brightnessOverlay ?? _startBrightness) + delta;
+      v = v.clamp(0.0, 1.0);
+      try { await ScreenBrightness().setScreenBrightness(v); } catch (_) {}
+      _showOverlay(brightness: v);
+    } else if (x > w * 0.67) {
+      // Громкость — используем player volume для единообразия
+      final player = ref.read(playerProvider);
+      var v = (player.volume / 100) + delta;
+      v = v.clamp(0.0, 1.0);
+      await player.setVolume(v * 100);
+      _showOverlay(volume: v);
+      // Также системную громкость пытаемся
+      try { await VolumeController.instance.setVolume(v); } catch (_) {}
+    }
+  }
 
   void _showControls(PlayerController player) {
     _hideTimer?.cancel();
@@ -95,7 +148,14 @@ class _VideoPageState extends ConsumerState<VideoPage> {
         if (snap.data != true) return const SizedBox.shrink();
         return const Center(child: SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3)));
       }),
-      Positioned.fill(child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => _controlsVisible ? setState(() => _controlsVisible = false) : _showControls(player), onDoubleTap: _toggleFullscreen, onHorizontalDragUpdate: (d) { final delta = Duration(milliseconds: (d.delta.dx * 90).round()); player.seek(player.position + delta); _showControls(player); }, child: MouseRegion(onHover: (_) => _showControls(player)))),
+      LayoutBuilder(builder: (context, constraints) {
+        return Positioned.fill(child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => _controlsVisible ? setState(() => _controlsVisible = false) : _showControls(player), onDoubleTap: _toggleFullscreen, onHorizontalDragUpdate: (d) { final delta = Duration(milliseconds: (d.delta.dx * 90).round()); player.seek(player.position + delta); _showControls(player); }, onVerticalDragStart: (d) => _onVerticalDragStart(d, constraints), onVerticalDragUpdate: (d) => _onVerticalDragUpdate(d, constraints), child: MouseRegion(onHover: (_) => _showControls(player))));
+      }),
+      // Оверлеи яркости/громкости (жесты Next Player)
+      if (_brightnessOverlay != null)
+        Positioned(left: 24, top: 80, child: _gestureOverlay(Icons.brightness_6_rounded, '${(_brightnessOverlay! * 100).round()}%', 'Яркость')),
+      if (_volumeOverlay != null)
+        Positioned(right: 24, top: 80, child: _gestureOverlay(Icons.volume_up_rounded, '${(_volumeOverlay! * 100).round()}%', 'Громкость')),
       IgnorePointer(
         ignoring: !_controlsVisible,
         child: AnimatedOpacity(
@@ -104,7 +164,8 @@ class _VideoPageState extends ConsumerState<VideoPage> {
           child: Column(children: [
             _topBar(context, player, current),
             const Spacer(),
-            // Кнопка выхода из фуллскрина на Android
+            Center(child: Text('Свайп ↑↓ слева — яркость, справа — громкость • двойной тап — фуллскрин', style: TextStyle(color: Colors.white.withOpacity(0.55), fontSize: 11))),
+            const SizedBox(height: 6),
             if (ref.watch(fullscreenProvider))
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -210,6 +271,10 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   Future<void> _subtitleMenu(BuildContext context, PlayerController player) async {
     final tracks = player.subtitleTracks; final selectedId = player.selectedSubtitleTrackId; final theme = Theme.of(context); final chosen = await showMenu<Object>(context: context, position: const RelativeRect.fromLTRB(240, 60, 20, 300), items: [const PopupMenuItem(value:'off', child: Text('Выключены')), const PopupMenuItem(value:'external', child: Text('Загрузить файл…')), for (final t in tracks) PopupMenuItem(value:t, child: Row(children:[Icon(selectedId==t.id&&t.id!='no'&&t.id!='auto'?Icons.radio_button_checked:Icons.radio_button_off, size:16, color:theme.colorScheme.primary), const SizedBox(width:8), Expanded(child: Text(t.title?.isNotEmpty==true?t.title!:(t.language?.isNotEmpty==true?t.language!:'Дорожка'), overflow: TextOverflow.ellipsis))]))]);
     if (chosen is String && chosen=='off') await player.selectSubtitleOff(); else if (chosen is String && chosen=='external') { const typeGroup = XTypeGroup(label:'Субтитры', extensions:['srt','ass','ssa','vtt']); try { final file = await openFile(acceptedTypeGroups:[typeGroup]); if (file!=null) await player.loadExternalSubtitle(file.path); } catch(_){} } else if (chosen is SubtitleTrack) await player.selectSubtitleTrack(chosen);
+  }
+
+  Widget _gestureOverlay(IconData icon, String value, String label) {
+    return Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(12)), child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: Colors.white, size: 18), const SizedBox(width: 8), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)), Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13))])]));
   }
 
   Widget _bottomBar(BuildContext context, PlayerController player) {
