@@ -328,7 +328,7 @@ class _NowPlaying extends StatelessWidget {
               Text(t.artist.isEmpty ? 'Неизвестный исполнитель' : t.artist, textAlign: TextAlign.center, style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.65))),
               if (t.album.isNotEmpty) Text(t.album, textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: theme.colorScheme.onSurface.withOpacity(0.45))),
               const SizedBox(height: 18),
-              RepaintBoundary(child: SizedBox(height: 90, child: Visualizer(playing: ref.watch(playerProvider.select((p)=>p.isPlaying)), mode: settings.visualizerMode, color: accent, opacity: settings.visualizerOpacity))),
+              RepaintBoundary(child: SizedBox(height: 90, child: Visualizer(playing: player.isPlaying, mode: settings.visualizerMode, color: accent, opacity: settings.visualizerOpacity))),
               const SizedBox(height: 14),
               const LiveSeekBar(),
               const SizedBox(height: 6),

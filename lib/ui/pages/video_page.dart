@@ -262,7 +262,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
             ])),
             Padding(padding: const EdgeInsets.fromLTRB(12, 8, 12, 4), child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
             Padding(padding: const EdgeInsets.fromLTRB(12, 0, 12, 10), child: Row(children: [Expanded(child: Text(fmtSize(t.sizeBytes), style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withOpacity(0.5)), maxLines: 1, overflow: TextOverflow.ellipsis)), PopupMenuButton<String>(onSelected: (v) async { if (v == 'play') await ref.read(playerProvider).open(list, i); if (v == 'remove') lib.removeTrack(t); }, itemBuilder: (_) => const [PopupMenuItem(value: 'play', child: Text('Воспроизвести')), PopupMenuItem(value: 'remove', child: Text('Удалить'))])])),
-          ])));
+          ]))));
         })),
       ]),
     );
