@@ -5,6 +5,8 @@ import '../../core/formatters.dart';
 import '../../state/player_controller.dart';
 
 /// Ползунок прогресса с метками времени.
+/// Поддерживает drag-preview: во время перетаскивания показываем _dragValue,
+/// а `onSeek` вызываем только на `onChangeEnd` — не спамим ExoPlayer seek'ами.
 class SeekBar extends StatelessWidget {
   final Duration position;
   final Duration duration;
@@ -13,6 +15,8 @@ class SeekBar extends StatelessWidget {
   final VoidCallback? onSeekEnd;
   final bool showTimes;
   final bool compact;
+  // dragValue — если не null, показываем его вместо position (preview)
+  final double? dragValue;
 
   const SeekBar({
     super.key,
@@ -23,24 +27,25 @@ class SeekBar extends StatelessWidget {
     this.onSeekEnd,
     this.showTimes = true,
     this.compact = false,
+    this.dragValue,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final maxMs = duration.inMilliseconds.toDouble();
-    final value = position.inMilliseconds
-        .clamp(0, maxMs > 0 ? maxMs.toInt() : 1)
-        .toDouble();
     final usableMax = maxMs > 0 ? maxMs : 1.0;
+    final value = (dragValue ?? position.inMilliseconds.clamp(0, maxMs > 0 ? maxMs.toInt() : 1).toDouble())
+        .clamp(0.0, usableMax);
+
+    // Во время drag показываем drag-время, иначе — реальную позицию
+    final displayPos = dragValue != null ? Duration(milliseconds: dragValue!.round()) : position;
 
     final slider = SliderTheme(
       data: SliderTheme.of(context).copyWith(
         trackHeight: compact ? 3 : 4,
-        thumbShape:
-            RoundSliderThumbShape(enabledThumbRadius: compact ? 6 : 7),
-        overlayShape:
-            RoundSliderOverlayShape(overlayRadius: compact ? 12 : 14),
+        thumbShape: RoundSliderThumbShape(enabledThumbRadius: compact ? 6 : 7),
+        overlayShape: RoundSliderOverlayShape(overlayRadius: compact ? 12 : 14),
         trackShape: const RoundedRectSliderTrackShape(),
       ),
       child: Slider(
@@ -48,9 +53,7 @@ class SeekBar extends StatelessWidget {
         max: usableMax,
         onChangeStart: onSeekStart != null ? (_) => onSeekStart!.call() : null,
         onChangeEnd: onSeekEnd != null ? (_) => onSeekEnd!.call() : null,
-        onChanged: maxMs > 0
-            ? (v) => onSeek(Duration(milliseconds: v.round()))
-            : null,
+        onChanged: maxMs > 0 ? (v) => onSeek(Duration(milliseconds: v.round())) : null,
         activeColor: theme.colorScheme.primary,
         inactiveColor: theme.dividerColor,
       ),
@@ -64,18 +67,18 @@ class SeekBar extends StatelessWidget {
 
     return Row(
       children: [
-        if (showTimes) SizedBox(width: 44, child: Text(fmtTime(position), style: style)),
+        if (showTimes) SizedBox(width: 48, child: Text(fmtTime(displayPos), style: style)),
         Expanded(child: slider),
         if (showTimes)
-          SizedBox(width: 44, child: Text(fmtTime(duration), style: style, textAlign: TextAlign.end)),
+          SizedBox(width: 48, child: Text(fmtTime(duration), style: style, textAlign: TextAlign.end)),
       ],
     );
   }
 }
 
-/// Живой сикбар — позиция через Stream, чтобы не перестраивать весь AppShell каждую секунду.
-/// duration всё ещё через provider select (меняется редко — только при смене трека).
-class LiveSeekBar extends ConsumerWidget {
+/// Живой сикбар — позиция через Stream, но seek только на отпускание.
+/// Во время drag не дергаем плеер, только preview. Флагман + 4K/HLS плавнее в разы.
+class LiveSeekBar extends ConsumerStatefulWidget {
   final bool compact;
   final bool showTimes;
   final VoidCallback? onDragStart;
@@ -83,15 +86,45 @@ class LiveSeekBar extends ConsumerWidget {
   const LiveSeekBar({super.key, this.compact = false, this.showTimes = true, this.onDragStart, this.onDragEnd});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<LiveSeekBar> createState() => _LiveSeekBarState();
+}
+
+class _LiveSeekBarState extends ConsumerState<LiveSeekBar> {
+  double? _dragValue; // null = не тянем, иначе preview позиция в ms
+
+  @override
+  Widget build(BuildContext context) {
     final duration = ref.watch(playerProvider.select((p) => p.duration));
     final player = ref.read(playerProvider);
+
     return StreamBuilder<Duration>(
       stream: player.positionStream,
       initialData: player.position,
       builder: (_, snap) {
         final pos = snap.data ?? player.position;
-        return SeekBar(position: pos, duration: duration, onSeek: player.seek, onSeekStart: onDragStart, onSeekEnd: onDragEnd, compact: compact, showTimes: showTimes);
+        return SeekBar(
+          position: pos,
+          duration: duration,
+          compact: widget.compact,
+          showTimes: widget.showTimes,
+          dragValue: _dragValue,
+          onSeekStart: () {
+            widget.onDragStart?.call();
+          },
+          onSeekEnd: () {
+            final v = _dragValue;
+            if (v != null) {
+              // единственный seek за весь жест — как в Kotlin onSeekEnd
+              player.seek(Duration(milliseconds: v.round()));
+            }
+            setState(() => _dragValue = null);
+            widget.onDragEnd?.call();
+          },
+          onSeek: (d) {
+            // preview без вызова плеера — только UI
+            setState(() => _dragValue = d.inMilliseconds.toDouble());
+          },
+        );
       },
     );
   }
