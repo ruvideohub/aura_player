@@ -247,14 +247,33 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     return sorted;
   }
 
+  void _cycleFit() {
+    final cur = ref.read(videoFitProvider);
+    final next = VideoFit.values[(cur.index + 1) % VideoFit.values.length];
+    ref.read(videoFitProvider.notifier).state = next;
+  }
+
+  Widget _fitMenu(BuildContext context) {
+    final fit = ref.watch(videoFitProvider);
+    return PopupMenuButton<VideoFit>(
+      tooltip: 'Масштаб: ${fit.label}',
+      icon: Stack(alignment: Alignment.center, children: [
+        const Icon(Icons.aspect_ratio_rounded, color: Colors.white, size: 22),
+        Positioned(bottom: 0, child: Container(padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 0), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(3)), child: Text(fit.shortLabel, style: const TextStyle(fontSize: 6, fontWeight: FontWeight.bold, color: Colors.black)))),
+      ]),
+      onSelected: (v) => ref.read(videoFitProvider.notifier).state = v,
+      itemBuilder: (_) => [for (final f in VideoFit.values) PopupMenuItem(value: f, child: Row(children: [Icon(fit == f ? Icons.radio_button_checked : Icons.radio_button_off, size: 16, color: Theme.of(context).colorScheme.primary), const SizedBox(width: 8), Text('${f.label} (${f.shortLabel})')]))],
+    );
+  }
+
   Widget _topBar(BuildContext context, PlayerController player, MediaTrack t) {
     final isAndroid = player.isAndroid;
     return Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.65), Colors.transparent])), child: Row(children: [
       IconButton(tooltip: 'Закрыть', icon: const Icon(Icons.close_rounded, color: Colors.white), onPressed: () async { await player.stopAndClearCurrent(); if (mounted) _hideTimer?.cancel(); }),
       Expanded(child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white))),
+      _fitMenu(context),
       _speedMenu(context, player),
       if (!isAndroid) ...[IconButton(tooltip: 'Аудиодорожка', icon: const Icon(Icons.audiotrack_rounded, color: Colors.white), onPressed: () => _audioTrackMenu(context, player)), IconButton(tooltip: 'Субтитры', icon: const Icon(Icons.subtitles_outlined, color: Colors.white), onPressed: () => _subtitleMenu(context, player))] else Tooltip(message: 'Дорожки/субтитры — позже', child: IconButton(icon: const Icon(Icons.subtitles_outlined, color: Colors.white38), onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Дорожки скоро на Media3'))))),
-      IconButton(tooltip: 'Полный экран', icon: Icon(ref.watch(fullscreenProvider) ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded, color: Colors.white), onPressed: _toggleFullscreen),
     ]));
   }
 
