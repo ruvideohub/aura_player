@@ -16,6 +16,8 @@ class NativeBridge {
   // ── подписчики на media actions ───────────────────────────────
   static final _actionCtrl = StreamController<String>.broadcast();
   static Stream<String> get mediaActions => _actionCtrl.stream;
+  static final _openFileCtrl = StreamController<String>.broadcast();
+  static Stream<String> get openFileRequests => _openFileCtrl.stream;
   static bool _handlerSet = false;
 
   static void ensureHandler() {
@@ -25,6 +27,9 @@ class NativeBridge {
       if (call.method == 'mediaAction') {
         final a = call.arguments is Map ? (call.arguments as Map)['action'] as String? : null;
         if (a != null) _actionCtrl.add(a);
+      } else if (call.method == 'openFile') {
+        final p = call.arguments is Map ? (call.arguments as Map)['path'] as String? : null;
+        if (p != null && p.isNotEmpty) _openFileCtrl.add(p);
       } else if (call.method == 'onUserLeaveHint') {
         _actionCtrl.add('AURA_LEAVE_HINT');
       } else if (call.method == 'pipChanged') {
@@ -38,7 +43,17 @@ class NativeBridge {
         final a = await _channel.invokeMethod<String>('consumeMediaAction');
         if (a != null && a.startsWith('AURA_')) _actionCtrl.add(a);
       } catch (_) {}
+      // холодный старт VIEW — Открыть с помощью
+      try {
+        final p = await _channel.invokeMethod<String>('consumeInitialOpen');
+        if (p != null && p.isNotEmpty) _openFileCtrl.add(p);
+      } catch (_) {}
     });
+  }
+
+  static Future<String?> consumeInitialOpen() async {
+    if (!isAndroid) return null;
+    try { return await _channel.invokeMethod<String>('consumeInitialOpen'); } catch (_) { return null; }
   }
 
   /// Скан библиотеки устройства через MediaStore.

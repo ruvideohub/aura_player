@@ -35,6 +35,7 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
   bool _dragOver = false;
   final FocusNode _shortcutFocus = FocusNode(debugLabel: 'shortcuts');
   StreamSubscription<String>? _mediaSub;
+  StreamSubscription<String>? _openFileSub;
   bool _inPip = false;
   Timer? _notifTimer;
 
@@ -44,6 +45,7 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
     WidgetsBinding.instance.addObserver(this);
     NativeBridge.ensureHandler();
     _mediaSub = NativeBridge.mediaActions.listen(_handleMediaAction);
+    _openFileSub = NativeBridge.openFileRequests.listen(_handleOpenFile);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await ref.read(libraryProvider).load();
@@ -54,6 +56,16 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
       // уведомление о разрешении
       if (!_isDesktop) {
         try { await NativeBridge.requestNotifPermission(); } catch (_) {}
+      }
+      // холодный старт VIEW — Открыть с помощью (повторно страхуем)
+      if (!_isDesktop) {
+        try {
+          final pending = await NativeBridge.consumeInitialOpen();
+          if (pending != null && pending.isNotEmpty && mounted) {
+            await Future.delayed(const Duration(milliseconds: 400));
+            _handleOpenFile(pending);
+          }
+        } catch (_) {}
       }
     });
 
@@ -198,10 +210,48 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
     } catch (_) { return false; }
   }
 
+  Future<void> _handleOpenFile(String raw) async {
+    final path = raw.trim();
+    if (path.isEmpty) return;
+    // защита от дублей — иногда и VIEW и consume дают один и тот же uri
+    // просто открываем; PlayerController сам заменит очередь
+    final isStream = isStreamUrl(path) || path.contains('.m3u8') || path.contains('.mpd');
+    final ext = extOf(path).toLowerCase();
+    // контент без расширения — считаем видео если не аудио
+    bool isVideo;
+    if (isStream) {
+      isVideo = true;
+    } else if (path.startsWith('content://')) {
+      // по расширению если есть, иначе эвристика по mime не доступна — пробуем видео по умолчанию,
+      // аудио контент обычно .mp3/.flac и расширение сохраняется в uri
+      if (audioExtensions.contains(ext)) isVideo = false;
+      else if (videoExtensions.contains(ext) || ext.isEmpty) isVideo = true;
+      else isVideo = isVideoPath(path);
+    } else {
+      isVideo = isVideoPath(path);
+      if (!isVideo && !isAudioPath(path)) {
+        // неизвестный — считаем видео
+        isVideo = true;
+      }
+    }
+
+    try {
+      final track = path.startsWith('http://') || path.startsWith('https://') || path.startsWith('rtmp://') || path.startsWith('rtsp://') || path.startsWith('content://')
+          ? MediaTrack.fromUrl(path, isVideo: isVideo)
+          : MediaTrack.fromFile(File(path.startsWith('file://') ? Uri.parse(path).toFilePath() : path), isVideo: isVideo);
+      ref.read(libraryProvider).importTracks([track]);
+      await ref.read(playerProvider).open([track], 0);
+      ref.read(pageProvider.notifier).state = isVideo ? 1 : 0;
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не удалось открыть: $e')));
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _mediaSub?.cancel();
+    _openFileSub?.cancel();
     _notifTimer?.cancel();
     _shortcutFocus.dispose();
     super.dispose();

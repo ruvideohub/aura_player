@@ -29,6 +29,7 @@ class MainActivity : FlutterActivity() {
     private var lastPos: Long = 0L
     private var lastDur: Long = 0L
     private var pendingAction: String? = null
+    private var pendingOpenPath: String? = null
 
     private val mediaActionReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -199,6 +200,14 @@ class MainActivity : FlutterActivity() {
                     pendingAction = null
                     result.success(a)
                 }
+                "consumeInitialOpen" -> {
+                    val p = pendingOpenPath
+                    pendingOpenPath = null
+                    result.success(p)
+                }
+                "getInitialOpen" -> {
+                    result.success(pendingOpenPath)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -258,9 +267,10 @@ class MainActivity : FlutterActivity() {
         } catch (_: Throwable) { false }
     }
 
-    // Обработка intents от уведомления/виджета
+    // Обработка intents от уведомления/виджета + VIEW (Открыть с помощью)
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleIntentAction(intent)
     }
 
@@ -270,10 +280,53 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun handleIntentAction(intent: Intent?) {
-        val a = intent?.action ?: return
+        if (intent == null) return
+        val a = intent.action ?: return
         if (a.startsWith("AURA_")) {
             handleMediaAction(a)
+            return
         }
+        if (a == Intent.ACTION_VIEW || a == Intent.ACTION_SEND) {
+            handleViewIntent(intent)
+            return
+        }
+        // также проверяем наличие data даже без известного action (некоторые файловые менеджеры)
+        if (intent.data != null && intent.type != null) {
+            val t = intent.type ?: ""
+            if (t.startsWith("video/") || t.startsWith("audio/")) {
+                handleViewIntent(intent)
+            }
+        }
+    }
+
+    private fun handleViewIntent(intent: Intent) {
+        // ACTION_SEND (share) тоже поддержим
+        var uri = intent.data
+        if (intent.action == Intent.ACTION_SEND) {
+            uri = intent.getParcelableExtra(Intent.EXTRA_STREAM) as? android.net.Uri
+                ?: intent.getStringExtra(Intent.EXTRA_TEXT)?.let { android.net.Uri.parse(it) }
+        }
+        if (uri == null) {
+            // иногда data в виде clipData
+            val clip = intent.clipData
+            if (clip != null && clip.itemCount > 0) uri = clip.getItemAt(0).uri
+        }
+        if (uri == null) return
+        val path = uri.toString()
+        if (path.isBlank()) return
+        // сохраняем для холодного старта
+        pendingOpenPath = path
+        // даём persist read permission для content://
+        try {
+            if (path.startsWith("content://")) {
+                val flags = intent.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                if (flags != 0) contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        } catch (_: Throwable) {
+            // на некоторых URI persist не поддерживается — игнор, флаг всё равно даст разовый доступ
+        }
+        // пробрасываем во Flutter
+        try { channel?.invokeMethod("openFile", mapOf("path" to path)) } catch (_: Throwable) {}
     }
 
     private fun handleMediaAction(action: String) {
