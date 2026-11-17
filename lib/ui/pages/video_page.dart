@@ -152,36 +152,26 @@ class _VideoPageState extends ConsumerState<VideoPage> {
       color: Colors.black,
       child: Stack(fit: StackFit.expand, children: [
         Positioned.fill(child: ColoredBox(color: Colors.black, child: player.buildVideoView())),
-        // === ДИАГНОСТИКА: жест временно отключен, чтобы проверить белый ===
-        // Раскомментируй блок ниже после проверки
-        // LayoutBuilder(builder: (context, constraints) {
-        //   return Positioned.fill(
-        //     child: GestureDetector(
-        //       behavior: HitTestBehavior.translucent,
-        //       onTap: () => _toggleControls(player),
-        //       onDoubleTapDown: (d) {
-        //         final w = constraints.maxWidth;
-        //         final x = d.localPosition.dx;
-        //         if (x < w * 0.35) { player.seek(player.position - const Duration(seconds: 10)); _showControls(player); }
-        //         else if (x > w * 0.65) { player.seek(player.position + const Duration(seconds: 10)); _showControls(player); }
-        //         else { _toggleFullscreen(); }
-        //       },
-        //       onHorizontalDragUpdate: (d) { final delta = Duration(milliseconds: (d.delta.dx * 90).round()); player.seek(player.position + delta); _showControls(player); },
-        //       onVerticalDragStart: (d) => _onVerticalDragStart(d, constraints),
-        //       onVerticalDragUpdate: (d) => _onVerticalDragUpdate(d, constraints),
-        //       child: const ColoredBox(color: Colors.transparent),
-        //     ),
-        //   );
-        // }),
-        // ВРЕМЕННО: простой тап на видео без жестов — 100% рабочий
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => _toggleControls(player),
-            onDoubleTap: _toggleFullscreen,
-            child: const ColoredBox(color: Colors.transparent),
-          ),
-        ),
+        // Жесты: под панелями, translucent — панели получают приоритет, центр не блокируется
+        LayoutBuilder(builder: (context, constraints) {
+          return Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => _toggleControls(player),
+              onDoubleTapDown: (d) {
+                final w = constraints.maxWidth;
+                final x = d.localPosition.dx;
+                if (x < w * 0.35) { player.seek(player.position - const Duration(seconds: 10)); _showControls(player); }
+                else if (x > w * 0.65) { player.seek(player.position + const Duration(seconds: 10)); _showControls(player); }
+                else { _toggleFullscreen(); }
+              },
+              onHorizontalDragUpdate: (d) { final delta = Duration(milliseconds: (d.delta.dx * 90).round()); player.seek(player.position + delta); _showControls(player); },
+              onVerticalDragStart: (d) => _onVerticalDragStart(d, constraints),
+              onVerticalDragUpdate: (d) => _onVerticalDragUpdate(d, constraints),
+              child: const ColoredBox(color: Colors.transparent),
+            ),
+          );
+        }),
         StreamBuilder<bool>(stream: player.bufferingStream, builder: (context, snap) {
           if (snap.data != true) return const SizedBox.shrink();
           return const Center(child: SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white)));
