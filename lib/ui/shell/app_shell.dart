@@ -180,9 +180,26 @@ class _AppShellState extends ConsumerState<AppShell> {
         content = Row(children: [if (wide) _Sidebar(selected: pageIndex), Expanded(child: pages)]);
       }
 
+      // Фуллскрин видео — отдельный чёрный Scaffold без SafeArea, без белого #F6F5F2
+      if (fullscreen && pageIndex == 1) {
+        final videoShell = DropTarget(
+          onDragDone: (d) => _openDropped(d.files.map((f) => f.path).toList()),
+          onDragEntered: (_) => setState(() => _dragOver = true),
+          onDragExited: (_) => setState(() => _dragOver = false),
+          child: Stack(children: [
+            Positioned.fill(child: ColoredBox(color: Colors.black, child: pages)),
+            if (_dragOver) Positioned.fill(child: IgnorePointer(child: Container(color: Theme.of(context).colorScheme.primary.withOpacity(0.10), child: Center(child: Icon(Icons.add_circle_outline_rounded, size: 72, color: Theme.of(context).colorScheme.primary))))),
+          ]),
+        );
+        return Scaffold(
+          backgroundColor: Colors.black,
+          body: Focus(focusNode: _shortcutFocus, autofocus: true, onKeyEvent: _onKey, child: videoShell),
+        );
+      }
+
       Widget shell = Column(children: [
         if (!fullscreen && _isDesktop) _TitleBar(onPickFiles: _pickFiles),
-        Expanded(child: content),
+        Expanded(child: ColoredBox(color: pageIndex == 1 ? Colors.black : Colors.transparent, child: content)),
         if (showMiniPlayer) SizedBox(height: 76, child: _MiniPlayer(compact: !wide, onOpenPlayer: () { ref.read(pageProvider.notifier).state = player.hasVideo ? 1 : 0; })),
         if (!fullscreen && !wide) SizedBox(height: 80, child: _MobileNav(selected: pageIndex)),
       ]);
@@ -194,9 +211,12 @@ class _AppShellState extends ConsumerState<AppShell> {
         child: Stack(children: [Positioned.fill(child: shell), if (_dragOver) Positioned.fill(child: IgnorePointer(child: Container(color: Theme.of(context).colorScheme.primary.withOpacity(0.10), child: Center(child: Icon(Icons.add_circle_outline_rounded, size: 72, color: Theme.of(context).colorScheme.primary)))))]),
       );
 
-      final scaffold = Scaffold(body: SafeArea(top: !_isDesktop, bottom: false, child: Focus(focusNode: _shortcutFocus, autofocus: true, onKeyEvent: _onKey, child: shell)));
+      final scaffold = Scaffold(
+        backgroundColor: pageIndex == 1 ? Colors.black : null,
+        body: SafeArea(top: !_isDesktop, bottom: false, child: Focus(focusNode: _shortcutFocus, autofocus: true, onKeyEvent: _onKey, child: shell)),
+      );
       if (_isDesktop) {
-        return Scaffold(body: Focus(focusNode: _shortcutFocus, autofocus: true, onKeyEvent: _onKey, child: shell));
+        return Scaffold(backgroundColor: pageIndex == 1 ? Colors.black : null, body: Focus(focusNode: _shortcutFocus, autofocus: true, onKeyEvent: _onKey, child: shell));
       }
       return scaffold;
     });
