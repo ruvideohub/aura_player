@@ -15,6 +15,7 @@ import '../services/android_player_backend.dart';
 import '../services/library.dart';
 import '../services/native_bridge.dart';
 import '../services/settings.dart';
+import '../ui/state/ui_state.dart';
 
 /// Центральный контроллер плеера: очередь, шаффл, повтор,
 /// восстановление позиции, эквалайзер, таймер сна.
@@ -219,16 +220,36 @@ class PlayerController extends ChangeNotifier {
   }
 
   /// Виджет видео — адаптивный: Media3 SurfaceView на Android, libmpv на десктопе
-  Widget buildVideoView({bool fitCover = false}) {
+  Widget buildVideoView({VideoFit fit = VideoFit.contain, bool fitCover = false}) {
     if (_isAndroid) {
-      return _androidBackend!.buildVideoView(fitCover: fitCover);
+      return _androidBackend!.buildVideoView(fit: fit, fitCover: fitCover);
     } else {
       final vc = videoController;
       if (vc == null) return const ColoredBox(color: Colors.black);
-      return Video(
-        controller: vc,
-        controls: (state) => const SizedBox.shrink(),
+      // Desktop libmpv — используем нативный fit media_kit + доп. обёртку для 16:9/4:3
+      BoxFit mkFit;
+      switch (fit) {
+        case VideoFit.contain: mkFit = BoxFit.contain; break;
+        case VideoFit.cover: mkFit = BoxFit.cover; break;
+        case VideoFit.stretch: mkFit = BoxFit.fill; break;
+        case VideoFit.sixteenNine:
+        case VideoFit.fourThree:
+          mkFit = BoxFit.contain; break;
+      }
+      Widget video = ColoredBox(
+        color: Colors.black,
+        child: Video(
+          controller: vc,
+          fit: mkFit,
+          controls: (state) => const SizedBox.shrink(),
+        ),
       );
+      if (fit == VideoFit.sixteenNine) {
+        video = ColoredBox(color: Colors.black, child: Center(child: AspectRatio(aspectRatio: 16 / 9, child: video)));
+      } else if (fit == VideoFit.fourThree) {
+        video = ColoredBox(color: Colors.black, child: Center(child: AspectRatio(aspectRatio: 4 / 3, child: video)));
+      }
+      return video;
     }
   }
 

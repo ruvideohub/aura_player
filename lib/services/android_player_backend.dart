@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import '../ui/state/ui_state.dart';
+
 /// Бэкенд для Android на Media3 (ExoPlayer) через video_player.
 /// Заменяет libmpv: понимает content://, не требует NDK-либ, даёт SurfaceView.
 class AndroidPlayerBackend {
@@ -193,32 +195,52 @@ class AndroidPlayerBackend {
     await _controller?.setPlaybackSpeed(_rate);
   }
 
-  /// Виджет видео — SurfaceView через Texture (Media3)
-  Widget buildVideoView({bool fitCover = false}) {
+  /// Виджет видео — SurfaceView через Texture (Media3) с режимами aspect ratio
+  Widget buildVideoView({VideoFit fit = VideoFit.contain, bool fitCover = false}) {
     final c = _controller;
     if (c == null || !c.value.isInitialized) {
       return const ColoredBox(color: Colors.black);
     }
-    // VideoPlayer уже отдаёт правильный aspectRatio
+    // legacy fitCover → cover
+    if (fitCover && fit == VideoFit.contain) fit = VideoFit.cover;
+
     final player = VideoPlayer(c);
-    if (fitCover) {
-      return SizedBox.expand(
-        child: FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: c.value.size.width == 0 ? 1280 : c.value.size.width,
-            height: c.value.size.height == 0 ? 720 : c.value.size.height,
-            child: player,
+    final ar = c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio;
+    final w = c.value.size.width == 0 ? 1280.0 : c.value.size.width;
+    final h = c.value.size.height == 0 ? 720.0 : c.value.size.height;
+    final sized = SizedBox(width: w, height: h, child: player);
+
+    switch (fit) {
+      case VideoFit.contain:
+        // Вписать целиком — чёрные поля, без растяжения
+        return Center(
+          child: AspectRatio(aspectRatio: ar, child: player),
+        );
+      case VideoFit.cover:
+        // Заполнить с обрезкой
+        return SizedBox.expand(
+          child: FittedBox(fit: BoxFit.cover, child: sized),
+        );
+      case VideoFit.stretch:
+        // Растянуть на весь экран с искажением
+        return SizedBox.expand(
+          child: FittedBox(fit: BoxFit.fill, child: sized),
+        );
+      case VideoFit.sixteenNine:
+        return Center(
+          child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: FittedBox(fit: BoxFit.contain, child: sized),
           ),
-        ),
-      );
+        );
+      case VideoFit.fourThree:
+        return Center(
+          child: AspectRatio(
+            aspectRatio: 4 / 3,
+            child: FittedBox(fit: BoxFit.contain, child: sized),
+          ),
+        );
     }
-    return Center(
-      child: AspectRatio(
-        aspectRatio: c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
-        child: player,
-      ),
-    );
   }
 
   Future<void> _disposeController() async {

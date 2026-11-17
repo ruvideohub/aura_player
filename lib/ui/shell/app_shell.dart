@@ -181,13 +181,14 @@ class _AppShellState extends ConsumerState<AppShell> {
       }
 
       // Фуллскрин видео — отдельный чёрный Scaffold без SafeArea, без белого #F6F5F2
+      // Исправлено дублирование: раньше pages оборачивался в ColoredBox+Stack ещё раз поверх VideoPage — убираем лишний слой
       if (fullscreen && pageIndex == 1) {
         final videoShell = DropTarget(
           onDragDone: (d) => _openDropped(d.files.map((f) => f.path).toList()),
           onDragEntered: (_) => setState(() => _dragOver = true),
           onDragExited: (_) => setState(() => _dragOver = false),
           child: Stack(children: [
-            Positioned.fill(child: ColoredBox(color: Colors.black, child: pages)),
+            Positioned.fill(child: pages),
             if (_dragOver) Positioned.fill(child: IgnorePointer(child: Container(color: Theme.of(context).colorScheme.primary.withOpacity(0.10), child: Center(child: Icon(Icons.add_circle_outline_rounded, size: 72, color: Theme.of(context).colorScheme.primary))))),
           ]),
         );
