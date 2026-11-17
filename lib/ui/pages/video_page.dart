@@ -12,6 +12,7 @@ import 'package:window_manager/window_manager.dart';
 import '../../core/formatters.dart';
 import '../../models/models.dart';
 import '../../services/library.dart';
+import '../../services/stream_resolver.dart';
 import '../../state/player_controller.dart';
 import '../state/ui_state.dart';
 import '../widgets/cover_art.dart';
@@ -122,11 +123,11 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     final url = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Открыть поток'),
+        title: const Text('Открыть ссылку / поток'),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Поддерживает HLS (.m3u8), DASH (.mpd), fMP4 (.m4s), RTMP/RTSP', style: TextStyle(fontSize: 12)),
+          const Text('VK: vk.com/video-123_456 • vkvideo.ru/video-123_456\nRutube: rutube.ru/video/<id> • OK: ok.ru/video/...\nПрямые: HLS (.m3u8), DASH (.mpd), MP4, RTMP/RTSP', style: TextStyle(fontSize: 12)),
           const SizedBox(height: 12),
-          TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(hintText: 'https://example.com/stream.m3u8', prefixIcon: Icon(Icons.link_rounded)), onSubmitted: (v) => Navigator.pop(ctx, v)),
+          TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(hintText: 'https://vk.com/video-12345_67890 или https://.../stream.m3u8', prefixIcon: Icon(Icons.link_rounded)), onSubmitted: (v) => Navigator.pop(ctx, v)),
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
@@ -136,15 +137,33 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     );
     if (url == null || url.trim().isEmpty) return;
     final u = url.trim();
-    if (!isStreamUrl(u) && !streamExtensions.contains(extOf(u)) && !u.contains('.m3u8') && !u.contains('.mpd')) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Вставь http(s) ссылку на поток')));
+    // Резолв VK/Rutube/OK → masterUrl, иначе пробуем как прямой поток
+    String playUrl = u;
+    String titleHint = u;
+    if (StreamResolver.isVkUrl(u) || StreamResolver.isRutubeUrl(u) || StreamResolver.isOkUrl(u)) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Резолвлю ссылку...'), duration: Duration(seconds: 1)));
+      try {
+        final resolved = await StreamResolver.resolve(u).timeout(const Duration(seconds: 10));
+        if (resolved != null && resolved.masterUrl.isNotEmpty) {
+          playUrl = resolved.masterUrl;
+          titleHint = resolved.videoId;
+        } else {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Не удалось резолвнуть — пробую как есть')));
+        }
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка резолва: $e')));
+      }
+    } else if (!isStreamUrl(u) && !streamExtensions.contains(extOf(u)) && !u.contains('.m3u8') && !u.contains('.mpd') && !u.contains('.mp4')) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Вставь ссылку VK/Rutube/OK или прямую на .m3u8/.mp4')));
       return;
     }
-    final track = MediaTrack.fromUrl(u, isVideo: true);
+    final track = MediaTrack.fromUrl(playUrl, isVideo: true);
     ref.read(libraryProvider).importTracks([track]);
     await ref.read(playerProvider).open([track], 0);
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Открываю: ${track.title}')));
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Открываю: ${resolvedTitle(titleHint)}')));
   }
+
+  String resolvedTitle(String hint) => hint.length > 48 ? '${hint.substring(0, 46)}…' : hint;
 
   @override
   Widget build(BuildContext context) {
