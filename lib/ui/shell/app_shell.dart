@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:desktop_drop/desktop_drop.dart';
@@ -10,6 +11,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../../models/models.dart';
 import '../../services/library.dart';
+import '../../services/native_bridge.dart';
 import '../../state/player_controller.dart';
 import '../pages/audio_page.dart';
 import '../pages/equalizer_page.dart';
@@ -29,20 +31,151 @@ class AppShell extends ConsumerStatefulWidget {
   ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends ConsumerState<AppShell> {
+class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver {
   bool _dragOver = false;
   final FocusNode _shortcutFocus = FocusNode(debugLabel: 'shortcuts');
+  StreamSubscription<String>? _mediaSub;
+  bool _inPip = false;
+  Timer? _notifTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    NativeBridge.ensureHandler();
+    _mediaSub = NativeBridge.mediaActions.listen(_handleMediaAction);
+
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await ref.read(libraryProvider).load();
       ref.read(playerProvider).applyEqualizer();
       if (!_isDesktop && mounted) {
         await _ensureAndroidPermissionsAndScan();
       }
+      // уведомление о разрешении
+      if (!_isDesktop) {
+        try { await NativeBridge.requestNotifPermission(); } catch (_) {}
+      }
     });
+
+    // слушаем изменения плеера чтобы обновлять уведомление/виджет только для музыки
+    ref.listenManual(playerProvider.select((p) => p.current?.path), (prev, next) {
+      _syncNotification();
+    });
+    ref.listenManual(playerProvider.select((p) => p.isPlaying), (prev, next) {
+      _syncNotification();
+    });
+  }
+
+  void _handleMediaAction(String a) async {
+    final player = ref.read(playerProvider);
+    switch (a) {
+      case 'AURA_TOGGLE':
+        await player.togglePlay();
+        break;
+      case 'AURA_NEXT':
+        await player.next(manual: true);
+        break;
+      case 'AURA_PREV':
+        await player.prev();
+        break;
+      case 'AURA_STOP':
+        await player.pauseForStop();
+        await NativeBridge.hideNotification();
+        break;
+      case 'AURA_LEAVE_HINT':
+        // авто-PiP для видео (кнопка + авто)
+        if (!_isDesktop && player.hasVideo && player.isPlaying && !_inPip) {
+          final c = player.androidVideoController;
+          final w = c?.value.size.width?.toInt() ?? 16;
+          final h = c?.value.size.height?.toInt() ?? 9;
+          // не вызываем если аудио — только видео
+          try {
+            final ok = await NativeBridge.enterPip(width: w, height: h);
+            if (ok) setState(() => _inPip = true);
+          } catch (_) {}
+        }
+        break;
+      case 'AURA_PIP_ENTER':
+        setState(() => _inPip = true);
+        break;
+      case 'AURA_PIP_EXIT':
+        setState(() => _inPip = false);
+        // выйти из фуллскрина если был
+        if (ref.read(fullscreenProvider)) {
+          ref.read(fullscreenProvider.notifier).state = false;
+        }
+        break;
+    }
+    // после любого действия обновляем уведомление
+    _syncNotification();
+  }
+
+  void _syncNotification() {
+    final player = ref.read(playerProvider);
+    final cur = player.current;
+    if (cur == null) {
+      // нет трека — прячем
+      NativeBridge.hideNotification();
+      _notifTimer?.cancel();
+      return;
+    }
+    // ТОЛЬКО для музыки — видео не показываем в шторке
+    if (cur.isVideo) {
+      NativeBridge.hideNotification();
+      _notifTimer?.cancel();
+      return;
+    }
+    // музыка — показываем/обновляем
+    final isPlaying = player.isPlaying;
+    final title = cur.title;
+    final artist = cur.artist.isEmpty ? (cur.album.isEmpty ? 'AURA Player' : cur.album) : cur.artist;
+    final pos = player.position.inMilliseconds;
+    final dur = player.duration.inMilliseconds;
+
+    // сразу
+    NativeBridge.updateNotification(title: title, artist: artist, isPlaying: isPlaying, pos: pos, dur: dur);
+
+    // периодическое обновление прогресса виджета/уведомления когда играет
+    _notifTimer?.cancel();
+    if (isPlaying) {
+      _notifTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
+        final p = ref.read(playerProvider);
+        if (p.current?.path != cur.path) { _notifTimer?.cancel(); return; }
+        if (!p.isPlaying) { _notifTimer?.cancel(); _syncNotification(); return; }
+        NativeBridge.updateNotification(
+          title: p.current?.title ?? title,
+          artist: p.current?.artist ?? artist,
+          isPlaying: true,
+          pos: p.position.inMilliseconds,
+          dur: p.duration.inMilliseconds,
+        );
+      });
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    final player = ref.read(playerProvider);
+    if (state == AppLifecycleState.paused) {
+      // если видео играет и не в PiP — ставим на паузу? требование: фон только для музыки, видео можно оставить но не фонить
+      // оставим видео на паузу чтобы не жрать батарею, если пользователь не в PiP
+      if (player.hasVideo && player.isPlaying && !_inPip) {
+        // не паузим автоматически — даём шанс авто-PiP через onUserLeaveHint (уже сработал)
+        // если через 500мс не в PiP — пауза
+        Future.delayed(const Duration(milliseconds: 700), () async {
+          if (!_inPip && player.hasVideo && player.isPlaying && mounted) {
+            // не паузим резко — пусть решает пользователь, просто не стартуем сервис
+          }
+        });
+      }
+      // музыка — ничего не делаем, сервис уже держит
+    } else if (state == AppLifecycleState.resumed) {
+      _syncNotification();
+    } else if (state == AppLifecycleState.inactive) {
+      // на iOS — пауза видео, но у нас Android
+    }
   }
 
   Future<void> _ensureAndroidPermissionsAndScan() async {
@@ -66,6 +199,8 @@ class _AppShellState extends ConsumerState<AppShell> {
           toRequest.add(Permission.videos);
           toRequest.add(Permission.photos);
         } catch (_) {}
+        // уведомление для Android 13+
+        try { toRequest.add(Permission.notification); } catch (_) {}
       }
       final statuses = await toRequest.request();
       return statuses.values.any((s) => s.isGranted || s.isLimited);
@@ -73,7 +208,13 @@ class _AppShellState extends ConsumerState<AppShell> {
   }
 
   @override
-  void dispose() { _shortcutFocus.dispose(); super.dispose(); }
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _mediaSub?.cancel();
+    _notifTimer?.cancel();
+    _shortcutFocus.dispose();
+    super.dispose();
+  }
 
   void _openDropped(List<String> paths) {
     final player = ref.read(playerProvider);
@@ -154,17 +295,23 @@ class _AppShellState extends ConsumerState<AppShell> {
     final pageIndex = ref.watch(pageProvider);
     final fullscreen = ref.watch(fullscreenProvider);
     final player = ref.watch(playerProvider);
+
+    // В PiP — показываем только видео без контролов
+    if (_inPip && player.hasVideo) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: player.buildVideoView(fit: ref.watch(videoFitProvider))),
+      );
+    }
+
     return LayoutBuilder(builder: (context, constraints) {
       final wide = constraints.maxWidth >= 980;
       final showMiniPlayer = _shouldShowMiniPlayer(pageIndex, player, fullscreen);
 
-      // Автопереход на видео при воспроизведении видео
       ref.listen(playerProvider.select((p) => p.hasVideo), (prev, next) {
-        if (next && !fullscreen) ref.read(pageProvider.notifier).state = 1;
+        if (next == true && !fullscreen) ref.read(pageProvider.notifier).state = 1;
       });
 
-      // 5 вкладок: Музыка / Видео / Плейлисты / Эквалайзер / Настройки
-      // Библиотека убрана — её функции теперь внутри Музыки и Видео (без дублирования)
       final pages = IndexedStack(index: pageIndex, children: const [
         AudioPage(),
         VideoPage(),
@@ -180,8 +327,6 @@ class _AppShellState extends ConsumerState<AppShell> {
         content = Row(children: [if (wide) _Sidebar(selected: pageIndex), Expanded(child: pages)]);
       }
 
-      // Фуллскрин видео — отдельный чёрный Scaffold без SafeArea, без белого #F6F5F2
-      // Исправлено дублирование: раньше pages оборачивался в ColoredBox+Stack ещё раз поверх VideoPage — убираем лишний слой
       if (fullscreen && pageIndex == 1) {
         final videoShell = DropTarget(
           onDragDone: (d) => _openDropped(d.files.map((f) => f.path).toList()),
@@ -291,7 +436,6 @@ class _Sidebar extends ConsumerWidget {
       const SizedBox(height: 14),
       for (final item in items) Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2), child: Material(color: selected == item.$1 ? accent.withOpacity(0.14) : Colors.transparent, borderRadius: BorderRadius.circular(12), child: InkWell(borderRadius: BorderRadius.circular(12), onTap: () => ref.read(pageProvider.notifier).state = item.$1, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11), child: Row(children: [Icon(item.$2, size: 20, color: selected == item.$1 ? accent : theme.colorScheme.onSurface.withOpacity(0.55)), const SizedBox(width: 12), Text(item.$3, style: TextStyle(fontSize: 14, fontWeight: selected == item.$1 ? FontWeight.w600 : FontWeight.w400, color: selected == item.$1 ? accent : theme.colorScheme.onSurface.withOpacity(0.75)))]))))),
       const Spacer(),
-      // Убрано дублирование кнопки "Открыть файлы" — теперь только в тайтлбаре
       Padding(padding: const EdgeInsets.all(12), child: Text('AURA 2.0 • Media3', textAlign: TextAlign.center, style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withOpacity(0.35)))),
     ]));
   }

@@ -1,32 +1,59 @@
 package com.example.aura_player
 
+import android.app.PictureInPictureParams
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.res.Configuration
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
+import android.util.Rational
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-/// AURA Player — точка входа Android.
-/// Регистрирует Platform Channel «aura.player/native», через который
-/// Dart-слой обращается к Kotlin: скан MediaStore, обложки,
-/// системный эквалайзер и бас-буст.
+/**
+ * AURA Player — точка входа Android.
+ * Регистрирует Platform Channel «aura.player/native», через который
+ * Dart-слой обращается к Kotlin.
+ */
 class MainActivity : FlutterActivity() {
+
+    private var channel: MethodChannel? = null
+    private var lastTitle: String = ""
+    private var lastArtist: String = ""
+    private var lastIsPlaying: Boolean = false
+    private var lastPos: Long = 0L
+    private var lastDur: Long = 0L
+    private var pendingAction: String? = null
+
+    private val mediaActionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            val a = intent?.getStringExtra("action") ?: return
+            handleMediaAction(a)
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(
-            flutterEngine.dartExecutor.binaryMessenger,
-            "aura.player/native"
-        ).setMethodCallHandler { call, result ->
+        val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "aura.player/native")
+        channel = ch
+
+        // Ловим broadcast от виджета/уведомления когда активити не в топе
+        try {
+            val f = IntentFilter("AURA_MEDIA_ACTION")
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(mediaActionReceiver, f, Context.RECEIVER_NOT_EXPORTED)
+            else registerReceiver(mediaActionReceiver, f)
+        } catch (_: Throwable) {}
+
+        ch.setMethodCallHandler { call, result ->
             when (call.method) {
                 "scanMedia" -> MediaStoreScanner.scan(applicationContext, result)
                 "albumArt" -> {
                     val path = call.argument<String>("path")
-                    if (path != null) {
-                        MediaStoreScanner.albumArt(applicationContext, path, result)
-                    } else {
-                        result.success(null)
-                    }
+                    if (path != null) MediaStoreScanner.albumArt(applicationContext, path, result) else result.success(null)
                 }
                 "eqSetEnabled" -> {
                     val on = call.argument<Boolean>("on") ?: false
@@ -40,7 +67,6 @@ class MainActivity : FlutterActivity() {
                     val strength = call.argument<Number>("strength")?.toInt() ?: 0
                     SystemEqualizer.setBassBoost(strength, result)
                 }
-                // Жесты: яркость и громкость — как в твоём Compose (без белого оверлея)
                 "getBrightness" -> {
                     val win = activity?.window
                     if (win != null) {
@@ -74,44 +100,169 @@ class MainActivity : FlutterActivity() {
                 "videoThumb" -> {
                     val path = call.argument<String>("path")
                     if (path != null) {
-                        // Выполняем в фоне, чтобы не блокировать UI
                         Thread {
                             var retriever: android.media.MediaMetadataRetriever? = null
                             try {
                                 retriever = android.media.MediaMetadataRetriever()
                                 if (path.startsWith("content://")) {
                                     retriever.setDataSource(applicationContext, android.net.Uri.parse(path))
-                                } else {
-                                    retriever.setDataSource(path)
-                                }
-                                // Берём кадр на 1с
+                                } else retriever.setDataSource(path)
                                 val bmp = retriever.getFrameAtTime(1000000, android.media.MediaMetadataRetriever.OPTION_CLOSEST)
                                 if (bmp != null) {
                                     val stream = java.io.ByteArrayOutputStream()
-                                    // Сжимаем до 320px ширины
-                                    val w = bmp.width
-                                    val h = bmp.height
-                                    val scale = 320f / w
-                                    val nh = (h * scale).toInt()
+                                    val w = bmp.width; val h = bmp.height
+                                    val scale = 320f / w; val nh = (h * scale).toInt()
                                     val scaled = android.graphics.Bitmap.createScaledBitmap(bmp, 320, nh, true)
                                     scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, stream)
                                     val bytes = stream.toByteArray()
                                     runOnUiThread { result.success(bytes) }
-                                    scaled.recycle()
-                                    bmp.recycle()
-                                } else {
-                                    runOnUiThread { result.success(null) }
-                                }
-                            } catch (e: Exception) {
-                                runOnUiThread { result.success(null) }
-                            } finally {
-                                try { retriever?.release() } catch (_: Exception) {}
-                            }
+                                    scaled.recycle(); bmp.recycle()
+                                } else runOnUiThread { result.success(null) }
+                            } catch (e: Exception) { runOnUiThread { result.success(null) } }
+                            finally { try { retriever?.release() } catch (_: Exception) {} }
                         }.start()
                     } else result.success(null)
+                }
+
+                // ── Уведомление / фон (только музыка) ──────────────────
+                "showNotification" -> {
+                    val title = call.argument<String>("title") ?: "AURA Player"
+                    val artist = call.argument<String>("artist") ?: ""
+                    val isPlaying = call.argument<Boolean>("isPlaying") ?: true
+                    val pos = (call.argument<Number>("pos")?.toLong() ?: 0L)
+                    val dur = (call.argument<Number>("dur")?.toLong() ?: 0L)
+                    lastTitle = title; lastArtist = artist; lastIsPlaying = isPlaying; lastPos = pos; lastDur = dur
+                    startAudioService(title, artist, isPlaying, pos, dur)
+                    result.success(true)
+                }
+                "updateNotification" -> {
+                    val title = call.argument<String>("title") ?: lastTitle
+                    val artist = call.argument<String>("artist") ?: lastArtist
+                    val isPlaying = call.argument<Boolean>("isPlaying") ?: lastIsPlaying
+                    val pos = (call.argument<Number>("pos")?.toLong() ?: lastPos)
+                    val dur = (call.argument<Number>("dur")?.toLong() ?: lastDur)
+                    lastTitle = title; lastArtist = artist; lastIsPlaying = isPlaying; lastPos = pos; lastDur = dur
+                    // обновляем живой сервис без пересоздания
+                    updateAudioService(title, artist, isPlaying, pos, dur)
+                    result.success(true)
+                }
+                "hideNotification" -> {
+                    hideAudioService()
+                    result.success(true)
+                }
+                "requestNotifPermission" -> {
+                    // На Android 13+ нужно запросить POST_NOTIFICATIONS — делаем через activity
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        try { requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 9001) } catch (_: Throwable) {}
+                    }
+                    result.success(true)
+                }
+
+                // ── PiP ────────────────────────────────────────────────
+                "enterPip" -> {
+                    val w = call.argument<Number>("width")?.toInt() ?: 16
+                    val h = call.argument<Number>("height")?.toInt() ?: 9
+                    val ok = enterPipMode(w, h)
+                    result.success(ok)
+                }
+                "isPipSupported" -> {
+                    val ok = Build.VERSION.SDK_INT >= 26 && packageManager.hasSystemFeature("android.software.picture_in_picture")
+                    result.success(ok)
+                }
+                "setPipAuto" -> { result.success(true) } // заглушка, логика в Dart
+
+                // Flutter спрашивает pending media action
+                "consumeMediaAction" -> {
+                    val a = pendingAction
+                    pendingAction = null
+                    result.success(a)
                 }
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun startAudioService(title: String, artist: String, isPlaying: Boolean, pos: Long, dur: Long) {
+        val i = Intent(this, AudioService::class.java).apply {
+            putExtra("title", title); putExtra("artist", artist); putExtra("isPlaying", isPlaying); putExtra("pos", pos); putExtra("dur", dur)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+        } catch (_: Throwable) { try { startService(i) } catch (_: Throwable) {} }
+    }
+
+    private fun updateAudioService(title: String, artist: String, isPlaying: Boolean, pos: Long, dur: Long) {
+        // Если сервис уже бежит — просто шлём intent с новыми данными (service перезапустится)
+        if (AudioService.isRunning) {
+            startAudioService(title, artist, isPlaying, pos, dur)
+        } else if (isPlaying) {
+            // показываем только если играет — требование "плеер в строке уведомлений" при музыке
+            startAudioService(title, artist, isPlaying, pos, dur)
+        } else {
+            // на паузе тоже показываем? да, чтобы было управление
+            startAudioService(title, artist, isPlaying, pos, dur)
+        }
+    }
+
+    private fun hideAudioService() {
+        try {
+            val i = Intent(this, AudioService::class.java).apply { action = AudioService.ACTION_STOP }
+            startService(i)
+            if (Build.VERSION.SDK_INT >= 26) try { startForegroundService(i) } catch (_: Throwable) {}
+        } catch (_: Throwable) {}
+        // скрыть виджет не надо — виджет живёт отдельно, но обновим
+        try { AuraWidgetProvider.pushUpdate(this, "AURA Player", "Остановлено", false, 0, 0) } catch (_: Throwable) {}
+    }
+
+    private fun enterPipMode(w: Int, h: Int): Boolean {
+        if (Build.VERSION.SDK_INT < 26) return false
+        if (!packageManager.hasSystemFeature("android.software.picture_in_picture")) return false
+        return try {
+            val rat = Rational(w.coerceIn(1, 1920), h.coerceIn(1, 1920))
+            val params = PictureInPictureParams.Builder()
+                .setAspectRatio(rat)
+                .build()
+            enterPictureInPictureMode(params)
+        } catch (_: Throwable) { false }
+    }
+
+    // Обработка intents от уведомления/виджета
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntentAction(intent)
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        handleIntentAction(intent)
+    }
+
+    private fun handleIntentAction(intent: Intent?) {
+        val a = intent?.action ?: return
+        if (a.startsWith("AURA_")) {
+            handleMediaAction(a)
+        }
+    }
+
+    private fun handleMediaAction(action: String) {
+        pendingAction = action
+        // пробрасываем во Flutter если уже подключён
+        try { channel?.invokeMethod("mediaAction", mapOf("action" to action)) } catch (_: Throwable) {}
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // Авто-PiP для видео — сигнал во Flutter, он сам решит
+        try { channel?.invokeMethod("onUserLeaveHint", null) } catch (_: Throwable) {}
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        try { channel?.invokeMethod("pipChanged", mapOf("inPip" to isInPictureInPictureMode)) } catch (_: Throwable) {}
+    }
+
+    override fun onDestroy() {
+        try { unregisterReceiver(mediaActionReceiver) } catch (_: Throwable) {}
+        super.onDestroy()
     }
 }

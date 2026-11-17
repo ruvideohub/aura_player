@@ -452,6 +452,13 @@ class PlayerController extends ChangeNotifier {
     }
   }
 
+  Future<void> pause() async => _backendPause();
+  Future<void> play() async => _backendPlay();
+  Future<void> pauseForStop() async {
+    await _backendPause();
+    notifyListeners();
+  }
+
   Future<void> setVolume(double v) async {
     _volumeBeforeMute = null;
     _volume = v.clamp(0, 100);

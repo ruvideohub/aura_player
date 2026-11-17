@@ -12,6 +12,7 @@ import 'package:window_manager/window_manager.dart';
 import '../../core/formatters.dart';
 import '../../models/models.dart';
 import '../../services/library.dart';
+import '../../services/native_bridge.dart';
 import '../../state/player_controller.dart';
 import '../state/ui_state.dart';
 import '../widgets/cover_art.dart';
@@ -302,14 +303,23 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     return sorted;
   }
 
+  Future<void> _enterPip(PlayerController player) async {
+    if (_isDesktop) return;
+    final c = player.androidVideoController;
+    final w = (c?.value.size.width ?? 16).toInt().clamp(1, 1920);
+    final h = (c?.value.size.height ?? 9).toInt().clamp(1, 1920);
+    final ok = await NativeBridge.enterPip(width: w, height: h);
+    if (!ok && mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PiP не поддерживается на этом устройстве')));
+  }
+
   Widget _topBar(BuildContext context, PlayerController player, MediaTrack t) {
     final isAndroid = player.isAndroid;
-    final fit = ref.watch(videoFitProvider);
     return Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.65), Colors.transparent])), child: Row(children: [
       Expanded(child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white))),
       _fitMenu(context),
       _speedMenu(context, player),
       if (!isAndroid) ...[IconButton(tooltip: 'Аудиодорожка', icon: const Icon(Icons.audiotrack_rounded, color: Colors.white), onPressed: () => _audioTrackMenu(context, player)), IconButton(tooltip: 'Субтитры', icon: const Icon(Icons.subtitles_outlined, color: Colors.white), onPressed: () => _subtitleMenu(context, player))] else Tooltip(message: 'Дорожки/субтитры — позже', child: IconButton(icon: const Icon(Icons.subtitles_outlined, color: Colors.white38), onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Дорожки скоро на Media3'))))),
+      IconButton(tooltip: 'Картинка-в-картинке', icon: const Icon(Icons.picture_in_picture_alt_rounded, color: Colors.white), onPressed: () => _enterPip(player)),
       IconButton(tooltip: 'Полный экран', icon: Icon(ref.watch(fullscreenProvider) ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded, color: Colors.white), onPressed: _toggleFullscreen),
     ]));
   }
@@ -364,6 +374,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
         IconButton(tooltip:'Без звука', onPressed: player.toggleMute, icon: Icon(player.muted||player.volume==0?Icons.volume_off_rounded:Icons.volume_up_rounded, color: Colors.white, size:20)),
         SizedBox(width:110, child: SliderTheme(data: SliderTheme.of(context).copyWith(trackHeight:3, thumbShape: const RoundSliderThumbShape(enabledThumbRadius:6), overlayShape: const RoundSliderOverlayShape(overlayRadius:10)), child: Slider(value: player.volume.clamp(0,100), max:100, onChanged: player.setVolume, activeColor: theme.colorScheme.primary, inactiveColor: Colors.white24))),
         const Spacer(),
+        IconButton(tooltip: 'Картинка-в-картинке', onPressed: () => _enterPip(player), icon: const Icon(Icons.picture_in_picture_alt_rounded, color: Colors.white, size: 20)),
         // aspect ratio быстрая кнопка
         Tooltip(message: 'Масштаб: ${fit.label} (${fit.shortLabel})', child: InkWell(onTap: _cycleFit, borderRadius: BorderRadius.circular(8), child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.white24)), child: Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.aspect_ratio_rounded, color: Colors.white, size: 16), const SizedBox(width: 4), Text(fit.shortLabel, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold))])))),
         const SizedBox(width: 8),
