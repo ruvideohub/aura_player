@@ -145,20 +145,21 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   }
 
   Widget _videoPlayer(BuildContext context, PlayerController player, MediaTrack current) {
-    // Никаких Material/screen_brightness — только ColoredBox черный, без белой дымки
+    // МИНИМАЛКА для диагностики белого — только видео + жест + контролы, без оверлеев
     return ColoredBox(
       color: Colors.black,
       child: Stack(fit: StackFit.expand, children: [
         Positioned.fill(child: ColoredBox(color: Colors.black, child: player.buildVideoView())),
-        // Фейковая яркость — чёрный оверлей с прозрачностью, без системного плагина
-        if (_fakeBrightness < 1.0)
-          Positioned.fill(child: IgnorePointer(child: Container(color: Colors.black.withOpacity((1 - _fakeBrightness) * 0.6)))),
-        // Жесты — прозрачный слой на весь экран, ниже контролов
+        // Жесты — прозрачный слой, КРАСНЫЙ в диагностике чтобы видеть
         LayoutBuilder(builder: (context, constraints) {
           return Positioned.fill(
             child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: () => _toggleControls(player),
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                // ignore: avoid_print
+                print('[AURA] TAP toggle ${_controlsVisible} -> ${!_controlsVisible}');
+                _toggleControls(player);
+              },
               onDoubleTapDown: (d) {
                 final w = constraints.maxWidth;
                 final x = d.localPosition.dx;
