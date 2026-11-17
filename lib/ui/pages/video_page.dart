@@ -145,53 +145,47 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   }
 
   Widget _videoPlayer(BuildContext context, PlayerController player, MediaTrack current) {
-    // МИНИМАЛКА для диагностики белого — только видео + жест + контролы, без оверлеев
+    // УЛЬТРА-МИНИМАЛКА: только видео, без единого оверлея — чтобы проверить, белый от UI или от самого видео
+    // Если после этого белый останется — это интро видео, а не наш косяк
+    // Жесты и контролы временно отключены, только видео
     return ColoredBox(
       color: Colors.black,
       child: Stack(fit: StackFit.expand, children: [
         Positioned.fill(child: ColoredBox(color: Colors.black, child: player.buildVideoView())),
-        // Жесты — прозрачный слой, КРАСНЫЙ в диагностике чтобы видеть
-        LayoutBuilder(builder: (context, constraints) {
-          return Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                // ignore: avoid_print
-                print('[AURA] TAP toggle ${_controlsVisible} -> ${!_controlsVisible}');
-                _toggleControls(player);
-              },
-              onDoubleTapDown: (d) {
-                final w = constraints.maxWidth;
-                final x = d.localPosition.dx;
-                if (x < w * 0.35) {
-                  player.seek(player.position - const Duration(seconds: 10));
-                  _showControls(player);
-                } else if (x > w * 0.65) {
-                  player.seek(player.position + const Duration(seconds: 10));
-                  _showControls(player);
-                } else {
-                  _toggleFullscreen();
-                }
-              },
-              onHorizontalDragUpdate: (d) {
-                final delta = Duration(milliseconds: (d.delta.dx * 90).round());
-                player.seek(player.position + delta);
-                _showControls(player);
-              },
-              onVerticalDragStart: (d) => _onVerticalDragStart(d, constraints),
-              onVerticalDragUpdate: (d) => _onVerticalDragUpdate(d, constraints),
-              child: const ColoredBox(color: Colors.transparent),
-            ),
-          );
-        }),
+        // === ДИАГНОСТИКА: жест временно отключен, чтобы проверить белый ===
+        // Раскомментируй блок ниже после проверки
+        // LayoutBuilder(builder: (context, constraints) {
+        //   return Positioned.fill(
+        //     child: GestureDetector(
+        //       behavior: HitTestBehavior.translucent,
+        //       onTap: () => _toggleControls(player),
+        //       onDoubleTapDown: (d) {
+        //         final w = constraints.maxWidth;
+        //         final x = d.localPosition.dx;
+        //         if (x < w * 0.35) { player.seek(player.position - const Duration(seconds: 10)); _showControls(player); }
+        //         else if (x > w * 0.65) { player.seek(player.position + const Duration(seconds: 10)); _showControls(player); }
+        //         else { _toggleFullscreen(); }
+        //       },
+        //       onHorizontalDragUpdate: (d) { final delta = Duration(milliseconds: (d.delta.dx * 90).round()); player.seek(player.position + delta); _showControls(player); },
+        //       onVerticalDragStart: (d) => _onVerticalDragStart(d, constraints),
+        //       onVerticalDragUpdate: (d) => _onVerticalDragUpdate(d, constraints),
+        //       child: const ColoredBox(color: Colors.transparent),
+        //     ),
+        //   );
+        // }),
+        // ВРЕМЕННО: простой тап на видео без жестов — 100% рабочий
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _toggleControls(player),
+            onDoubleTap: _toggleFullscreen,
+            child: const ColoredBox(color: Colors.transparent),
+          ),
+        ),
         StreamBuilder<bool>(stream: player.bufferingStream, builder: (context, snap) {
           if (snap.data != true) return const SizedBox.shrink();
           return const Center(child: SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white)));
         }),
-        if (_brightnessOverlay != null)
-          Positioned(left: 24, top: 80, child: _gestureOverlay(Icons.brightness_6_rounded, '${(_brightnessOverlay! * 100).round()}%', 'Яркость')),
-        if (_volumeOverlay != null)
-          Positioned(right: 24, top: 80, child: _gestureOverlay(Icons.volume_up_rounded, '${(_volumeOverlay! * 100).round()}%', 'Громкость')),
         // Контролы — только top и bottom, центр свободен
         Positioned(
           top: 0, left: 0, right: 0,
