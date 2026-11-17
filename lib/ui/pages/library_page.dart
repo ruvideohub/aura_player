@@ -192,7 +192,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
             ),
             const SizedBox(height: 16),
             FilledButton(
-              onPressed: () => ref.read(pageProvider.notifier).state = 5,
+              onPressed: () => ref.read(pageProvider.notifier).state = 4,
               child: const Text('К настройкам'),
             ),
           ],

@@ -510,9 +510,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                           OutlinedButton.icon(
                             onPressed: () async {
                               try {
+                                final messenger = ScaffoldMessenger.of(context);
                                 final dir = await getDirectoryPath();
-                                if (dir != null) settings.addScanDir(dir);
-                              } catch (_) {}
+                                if (dir == null) {
+                                  messenger.showSnackBar(const SnackBar(content: Text('Выбор отменён')));
+                                  return;
+                                }
+                                settings.addScanDir(dir);
+                                messenger.showSnackBar(SnackBar(content: Text('Добавлено: $dir')));
+                              } catch (e) {
+                                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка выбора папки: $e')));
+                              }
                             },
                             icon: const Icon(Icons.create_new_folder_outlined,
                                 size: 18),

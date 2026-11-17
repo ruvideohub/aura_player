@@ -273,6 +273,30 @@ class LibraryController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void importTrack(MediaTrack track) {
+    if (_known(track.path)) return;
+    if (track.isVideo) {
+      video = [...video, track];
+    } else {
+      audio = [...audio, track];
+    }
+    _persistLibrary();
+    notifyListeners();
+  }
+
+  void importTracks(List<MediaTrack> tracks) {
+    var added = 0;
+    for (final t in tracks) {
+      if (_known(t.path)) continue;
+      if (t.isVideo) video = [...video, t]; else audio = [...audio, t];
+      added++;
+    }
+    if (added > 0) {
+      _persistLibrary();
+      notifyListeners();
+    }
+  }
+
   void removeTrack(MediaTrack track) {
     (track.isVideo ? video : audio).removeWhere((t) => t.path == track.path);
     _persistLibrary();
