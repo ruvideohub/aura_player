@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../services/native_bridge.dart';
 import '../../state/player_controller.dart';
@@ -52,11 +53,40 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay> {
   @override
   void dispose() { _hudTimer?.cancel(); super.dispose(); }
 
+  bool get _isDesktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
       final w = constraints.maxWidth;
       final h = constraints.maxHeight;
+      // На ПК — упрощённые жесты: тап + seek внизу, без системной яркости/громкости
+      if (_isDesktop) {
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: widget.onTap,
+          onDoubleTap: widget.onTap,
+          child: Stack(children: [
+            widget.child,
+            Positioned.fill(
+              child: _PanHandler(
+                onSeek: (pos, dur, fwd) => setState(() { _hudSeekPos = pos; _hudSeekDur = dur; _seekFwd = fwd; _hudBri=null; _hudVol=null; _bumpHud(); }),
+                onSeekEnd: (pos) { setState(() => _hudSeekPos=null); widget.player.seek(Duration(milliseconds: pos)); },
+                onBrightness: (_) {},
+                onVolume: (_) {},
+                player: widget.player,
+                width: w, height: h,
+              ),
+            ),
+            if (_hudSeekPos != null && _hudSeekDur != null)
+              Positioned(
+                left: 32, right: 32, bottom: 32,
+                child: _SeekHud(pos: _hudSeekPos!, dur: _hudSeekDur!, fwd: _seekFwd),
+              ),
+          ]),
+        );
+      }
+      // Мобилки — полные жесты как в Compose
       return GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: widget.onTap,
@@ -67,17 +97,11 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay> {
           else widget.onTap();
         },
         onPanStart: (d) async {
-          // bottom 25% — seek, иначе brightness/volume
           final isSeek = d.localPosition.dy > h * 0.75;
-          // Сохраняем начальные значения
-          if (!isSeek) {
-            // Для вертикали — запомним старт
-            // brightness/volume старта берём асинхронно, но можно синхронно
-          }
+          if (!isSeek) {}
         },
         child: Stack(children: [
           widget.child,
-          // Вертикаль/горизонталь — через Pan с логикой как в Compose
           Positioned.fill(
             child: _PanHandler(
               onSeek: (pos, dur, fwd) => setState(() { _hudSeekPos = pos; _hudSeekDur = dur; _seekFwd = fwd; _hudBri=null; _hudVol=null; _bumpHud(); }),
@@ -88,7 +112,6 @@ class _PlayerGestureOverlayState extends State<PlayerGestureOverlay> {
               width: w, height: h,
             ),
           ),
-          // HUDs — как в Compose
           if (_hudBri != null)
             Positioned(left: 24, top: 0, bottom: 0, child: Center(child: _IndicatorBar(icon: Icons.light_mode, value: _hudBri!, color: Colors.white))),
           if (_hudVol != null)
@@ -117,12 +140,13 @@ class _PanHandler extends StatefulWidget {
 }
 class _PanHandlerState extends State<_PanHandler> {
   Offset? _start;
-  int? _dragType; // 1 seek, 2 bri, 3 vol
+  int? _dragType;
   double _accX=0, _accY=0;
   int _startPos=0, _dur=0;
   double _startBri=0.5, _startVol=0;
   double _maxVol=15;
   bool _seekFwd=true;
+  bool get _isDesktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -132,11 +156,10 @@ class _PanHandlerState extends State<_PanHandler> {
         _accX=0; _accY=0; _dragType=null;
         final isSeek = d.localPosition.dy > widget.height*0.75;
         if (isSeek) {
-          _dragType = 0; // undecided but seek zone
+          _dragType = 0;
           _startPos = widget.player.position.inMilliseconds;
           _dur = widget.player.duration.inMilliseconds;
         } else {
-          // preload
           try { _startBri = await NativeBridge.getBrightness(); } catch(_){ _startBri=0.5; }
           try { final m= await NativeBridge.getVolume(); _startVol = m['cur']!.toDouble(); _maxVol = m['max']!.toDouble(); } catch(_){}
         }
@@ -165,23 +188,22 @@ class _PanHandlerState extends State<_PanHandler> {
           _seekFwd = delta>=0;
           widget.onSeek(target, dur, _seekFwd);
         } else if (_dragType==2) {
+          if (_isDesktop) return;
           final diff = -(_accY / widget.height)*1.5;
           final nb = (_startBri + diff).clamp(0.0, 1.0);
           await NativeBridge.setBrightness(nb);
           widget.onBrightness(nb);
         } else if (_dragType==3) {
+          if (_isDesktop) return;
           final diff = -(_accY / widget.height)*_maxVol*1.5;
           final nv = (_startVol + diff).clamp(0, _maxVol);
           await NativeBridge.setVolume(nv.round());
-          // Синхронизируем и плеер, чтобы полоска снизу тоже двигалась
           widget.player.setVolume((nv/_maxVol)*100);
           widget.onVolume(nv/_maxVol);
         }
       },
       onPanEnd: (d) {
         if (_dragType==1) {
-          // seek commit handled via last hud value
-          // we need to find last target — store it
           final dur = widget.player.duration.inMilliseconds;
           final maxSpan = dur < 300000 ? dur : 300000;
           final delta = ((_accX / widget.width) * maxSpan).round();
