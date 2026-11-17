@@ -45,7 +45,7 @@ ThemeData buildTheme(Brightness brightness, Color accent) {
       elevation: 0,
       centerTitle: false,
     ),
-    cardTheme: CardTheme(
+    cardTheme: CardThemeData(
       color: surface,
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -80,7 +80,7 @@ ThemeData buildTheme(Brightness brightness, Color accent) {
         side: BorderSide(color: outline),
       ),
     ),
-    dialogTheme: DialogTheme(
+    dialogTheme: DialogThemeData(
       backgroundColor: surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
     ),
