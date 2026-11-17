@@ -7,8 +7,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:screen_brightness/screen_brightness.dart';
-import 'package:volume_controller/volume_controller.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../core/formatters.dart';
@@ -30,43 +28,17 @@ class VideoPage extends ConsumerStatefulWidget {
 class _VideoPageState extends ConsumerState<VideoPage> {
   bool _controlsVisible = true;
   Timer? _hideTimer;
-  double? _brightnessOverlay; // 0..1 слева
-  double? _volumeOverlay; // 0..1 справа
+  double? _brightnessOverlay; // 0..1 для подсказки
+  double? _volumeOverlay;
   Timer? _overlayTimer;
   double _startBrightness = 0.5;
   double _startVolume = 0.5;
+  double _fakeBrightness = 1.0; // 0.4..1.0 — фейковая яркость через чёрный оверлей, без системного плагина
   String _query = '';
   String _sort = 'date';
 
   @override
-  void initState() {
-    super.initState();
-    // Автоскрытие через 3с после открытия видео
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      Future.delayed(const Duration(seconds: 1), () {
-        if (mounted && _controlsVisible) {
-          final p = ref.read(playerProvider);
-          if (p.hasVideo && p.isPlaying) {
-            _scheduleHide(p);
-          }
-        }
-      });
-    });
-  }
-
-  @override
   void dispose() { _hideTimer?.cancel(); _overlayTimer?.cancel(); super.dispose(); }
-
-  void _scheduleHide(PlayerController player) {
-    _hideTimer?.cancel();
-    _hideTimer = Timer(const Duration(seconds: 3), () {
-      if (!mounted) return;
-      // Прячем только если играет — на паузе оставляем
-      if (ref.read(playerProvider).isPlaying && _controlsVisible) {
-        setState(() => _controlsVisible = false);
-      }
-    });
-  }
 
   void _showOverlay({double? brightness, double? volume}) {
     setState(() {
@@ -79,39 +51,42 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     });
   }
 
-  Future<void> _onVerticalDragStart(DragStartDetails d, BoxConstraints c) async {
-    try { _startBrightness = await ScreenBrightness().current; } catch (_) { _startBrightness = 0.5; }
-    try { _startVolume = await VolumeController().getVolume(); } catch (_) { _startVolume = 0.5; }
+  void _onVerticalDragStart(DragStartDetails d, BoxConstraints c) {
+    _startBrightness = _fakeBrightness;
+    _startVolume = ref.read(playerProvider).volume / 100;
   }
 
-  Future<void> _onVerticalDragUpdate(DragUpdateDetails d, BoxConstraints c) async {
+  void _onVerticalDragUpdate(DragUpdateDetails d, BoxConstraints c) {
     final w = c.maxWidth;
     final h = c.maxHeight;
     final x = d.localPosition.dx;
     final dy = d.delta.dy;
-    final delta = -dy / h; // вверх = увеличить
+    final delta = -dy / h;
     if (x < w * 0.33) {
       var v = (_brightnessOverlay ?? _startBrightness) + delta;
-      v = v.clamp(0.0, 1.0);
-      try { await ScreenBrightness().setScreenBrightness(v); } catch (_) {}
+      v = v.clamp(0.4, 1.0);
+      setState(() => _fakeBrightness = v);
       _showOverlay(brightness: v);
     } else if (x > w * 0.67) {
       final player = ref.read(playerProvider);
       var v = (player.volume / 100) + delta;
       v = v.clamp(0.0, 1.0);
-      await player.setVolume(v * 100);
+      player.setVolume(v * 100);
       _showOverlay(volume: v);
-      try { VolumeController().setVolume(v); } catch (_) {}
     }
   }
 
+  void _scheduleHide(PlayerController player) {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted && ref.read(playerProvider).isPlaying && _controlsVisible) setState(() => _controlsVisible = false);
+    });
+  }
   void _showControls(PlayerController player) {
     _hideTimer?.cancel();
     if (!_controlsVisible) setState(() => _controlsVisible = true);
-    // Показываем и планируем скрытие
     _scheduleHide(player);
   }
-
   void _toggleControls(PlayerController player) {
     if (_controlsVisible) {
       _hideTimer?.cancel();
@@ -127,6 +102,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     if (_isDesktop) {
       try { await windowManager.setFullScreen(fs); } catch (_) {}
     } else {
+      // Android/iOS — иммерсивный фуллскрин
       try {
         if (fs) {
           await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -137,10 +113,6 @@ class _VideoPageState extends ConsumerState<VideoPage> {
         }
       } catch (_) {}
     }
-    // После ухода/прихода фуллскрина — показать контролы и спрятать через 3с
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (mounted) _showControls(ref.read(playerProvider));
-    });
   }
 
   Future<void> _openVideo() async {
@@ -160,17 +132,12 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   Widget build(BuildContext context) {
     final player = ref.watch(playerProvider);
     final current = player.current;
-    // Слушаем смену трека — показываем контролы и планируем скрытие
     ref.listen(playerProvider.select((p) => p.current?.path), (prev, next) {
-      if (next != null && player.hasVideo) {
-        _showControls(player);
-      }
+      if (next != null && player.hasVideo) _showControls(player);
     });
-    // Слушаем play/pause
     ref.listen(playerProvider.select((p) => p.isPlaying), (prev, playing) {
       if (playing == true) _scheduleHide(player);
     });
-
     if (current != null && player.hasVideo) {
       return _videoPlayer(context, player, current);
     }
@@ -178,126 +145,86 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   }
 
   Widget _videoPlayer(BuildContext context, PlayerController player, MediaTrack current) {
-    // Принудительно чёрный — Scaffold light даёт #F6F5F2, Material наследует — отсюда белая дымка.
-    // Делаем ColoredBox+Theme.dark, без Material.
+    // Никаких Material/screen_brightness — только ColoredBox черный, без белой дымки
     return ColoredBox(
       color: Colors.black,
-      child: Theme(
-        data: ThemeData.dark(useMaterial3: true),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // Видео — чёрный фон, video_player за ним
-            Positioned.fill(
-              child: ColoredBox(
-                color: Colors.black,
-                child: player.buildVideoView(),
-              ),
-            ),
-          // Жесты — прозрачный слой на весь экран (под контролами).
-          // Тап центр — показать/скрыть, двойной тап — фуллскрин / перемотка, свайпы —
-          // горизонталь = перемотка, вертикаль слева = яркость, справа = громкость.
-          LayoutBuilder(builder: (context, constraints) {
-            return Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: () => _toggleControls(player),
-                onDoubleTapDown: (d) {
-                  final w = constraints.maxWidth;
-                  final x = d.localPosition.dx;
-                  if (x < w * 0.35) {
-                    // Левый край — назад 10с
-                    player.seek(player.position - const Duration(seconds: 10));
-                    _showControls(player);
-                  } else if (x > w * 0.65) {
-                    // Правый край — вперёд 10с
-                    player.seek(player.position + const Duration(seconds: 10));
-                    _showControls(player);
-                  } else {
-                    _toggleFullscreen();
-                  }
-                },
-                // Дубль-тап оставляем и на onDoubleTap для надёжности (центр)
-                onDoubleTap: _toggleFullscreen,
-                onHorizontalDragUpdate: (d) {
-                  final delta = Duration(milliseconds: (d.delta.dx * 90).round());
-                  player.seek(player.position + delta);
+      child: Stack(fit: StackFit.expand, children: [
+        Positioned.fill(child: ColoredBox(color: Colors.black, child: player.buildVideoView())),
+        // Фейковая яркость — чёрный оверлей с прозрачностью, без системного плагина
+        if (_fakeBrightness < 1.0)
+          Positioned.fill(child: IgnorePointer(child: Container(color: Colors.black.withOpacity((1 - _fakeBrightness) * 0.6)))),
+        // Жесты — прозрачный слой на весь экран, ниже контролов
+        LayoutBuilder(builder: (context, constraints) {
+          return Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => _toggleControls(player),
+              onDoubleTapDown: (d) {
+                final w = constraints.maxWidth;
+                final x = d.localPosition.dx;
+                if (x < w * 0.35) {
+                  player.seek(player.position - const Duration(seconds: 10));
                   _showControls(player);
-                },
-                onVerticalDragStart: (d) => _onVerticalDragStart(d, constraints),
-                onVerticalDragUpdate: (d) => _onVerticalDragUpdate(d, constraints),
-                child: const ColoredBox(color: Colors.transparent),
-              ),
-            );
-          }),
-          // Буферизация — поверх видео, под контролами
-          StreamBuilder<bool>(
-            stream: player.bufferingStream,
-            builder: (context, snap) {
-              if (snap.data != true) return const SizedBox.shrink();
-              return const Center(
-                child: SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white)),
-              );
-            },
-          ),
-          // Оверлеи яркости/громкости — маленькие, не на весь экран
-          if (_brightnessOverlay != null)
-            Positioned(left: 24, top: 80, child: _gestureOverlay(Icons.brightness_6_rounded, '${(_brightnessOverlay! * 100).round()}%', 'Яркость')),
-          if (_volumeOverlay != null)
-            Positioned(right: 24, top: 80, child: _gestureOverlay(Icons.volume_up_rounded, '${(_volumeOverlay! * 100).round()}%', 'Громкость')),
-
-          // ——— Контролы: ТОЛЬКО top и bottom, центр НЕ перекрываем ———
-          Positioned(
-            top: 0, left: 0, right: 0,
-            child: IgnorePointer(
-              ignoring: !_controlsVisible,
-              child: AnimatedOpacity(
-                opacity: _controlsVisible ? 1 : 0,
-                duration: const Duration(milliseconds: 180),
-                child: _topBar(context, player, current),
-              ),
+                } else if (x > w * 0.65) {
+                  player.seek(player.position + const Duration(seconds: 10));
+                  _showControls(player);
+                } else {
+                  _toggleFullscreen();
+                }
+              },
+              onHorizontalDragUpdate: (d) {
+                final delta = Duration(milliseconds: (d.delta.dx * 90).round());
+                player.seek(player.position + delta);
+                _showControls(player);
+              },
+              onVerticalDragStart: (d) => _onVerticalDragStart(d, constraints),
+              onVerticalDragUpdate: (d) => _onVerticalDragUpdate(d, constraints),
+              child: const ColoredBox(color: Colors.transparent),
+            ),
+          );
+        }),
+        StreamBuilder<bool>(stream: player.bufferingStream, builder: (context, snap) {
+          if (snap.data != true) return const SizedBox.shrink();
+          return const Center(child: SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white)));
+        }),
+        if (_brightnessOverlay != null)
+          Positioned(left: 24, top: 80, child: _gestureOverlay(Icons.brightness_6_rounded, '${(_brightnessOverlay! * 100).round()}%', 'Яркость')),
+        if (_volumeOverlay != null)
+          Positioned(right: 24, top: 80, child: _gestureOverlay(Icons.volume_up_rounded, '${(_volumeOverlay! * 100).round()}%', 'Громкость')),
+        // Контролы — только top и bottom, центр свободен
+        Positioned(
+          top: 0, left: 0, right: 0,
+          child: IgnorePointer(
+            ignoring: !_controlsVisible,
+            child: AnimatedOpacity(
+              opacity: _controlsVisible ? 1 : 0,
+              duration: const Duration(milliseconds: 180),
+              child: GestureDetector(behavior: HitTestBehavior.translucent, onTap: () => _toggleControls(player), child: _topBar(context, player, current)),
             ),
           ),
-          Positioned(
-            left: 0, right: 0, bottom: 0,
-            child: IgnorePointer(
-              ignoring: !_controlsVisible,
-              child: AnimatedOpacity(
-                opacity: _controlsVisible ? 1 : 0,
-                duration: const Duration(milliseconds: 180),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Text(
-                        'Свайп ↑↓ слева — яркость, справа — громкость • двойной тап — фуллскрин',
-                        style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 10),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                    if (ref.watch(fullscreenProvider))
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: Center(
-                          child: FilledButton.icon(
-                            onPressed: _toggleFullscreen,
-                            icon: const Icon(Icons.fullscreen_exit_rounded, size: 18),
-                            label: const Text('Выйти из полного экрана', style: TextStyle(fontSize: 13)),
-                            style: FilledButton.styleFrom(backgroundColor: Colors.black87, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
-                          ),
-                        ),
-                      ),
-                    _bottomBar(context, player),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          ],
         ),
-      ),
+        Positioned(
+          left: 0, right: 0, bottom: 0,
+          child: IgnorePointer(
+            ignoring: !_controlsVisible,
+            child: AnimatedOpacity(
+              opacity: _controlsVisible ? 1 : 0,
+              duration: const Duration(milliseconds: 180),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Padding(padding: const EdgeInsets.only(bottom: 4), child: Text('Свайп ↑↓ слева — яркость, справа — громкость • двойной тап — фуллскрин', style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 10), textAlign: TextAlign.center)),
+                if (ref.watch(fullscreenProvider))
+                  Padding(padding: const EdgeInsets.only(bottom: 6), child: Center(child: FilledButton.icon(onPressed: _toggleFullscreen, icon: const Icon(Icons.fullscreen_exit_rounded, size: 18), label: const Text('Выйти из полного экрана', style: TextStyle(fontSize: 13)), style: FilledButton.styleFrom(backgroundColor: Colors.black87, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8))))),
+                GestureDetector(behavior: HitTestBehavior.translucent, onTap: () => _toggleControls(player), child: _bottomBar(context, player)),
+              ]),
+            ),
+          ),
+        ),
+      ]),
     );
+  }
+
+  Widget _gestureOverlay(IconData icon, String value, String label) {
+    return Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(12)), child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: Colors.white, size: 18), const SizedBox(width: 8), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)), Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13))])]));
   }
 
   Widget _videoLibrary(BuildContext context, PlayerController player) {
@@ -366,20 +293,12 @@ class _VideoPageState extends ConsumerState<VideoPage> {
 
   Widget _topBar(BuildContext context, PlayerController player, MediaTrack t) {
     final isAndroid = player.isAndroid;
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTap: () => _toggleControls(player),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.70), Colors.black.withOpacity(0.15), Colors.transparent])),
-        child: Row(children: [
-          Expanded(child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white))),
-          _speedMenu(context, player),
-          if (!isAndroid) ...[IconButton(tooltip: 'Аудиодорожка', icon: const Icon(Icons.audiotrack_rounded, color: Colors.white), onPressed: () => _audioTrackMenu(context, player)), IconButton(tooltip: 'Субтитры', icon: const Icon(Icons.subtitles_outlined, color: Colors.white), onPressed: () => _subtitleMenu(context, player))] else Tooltip(message: 'Дорожки/субтитры — позже', child: IconButton(icon: const Icon(Icons.subtitles_outlined, color: Colors.white38), onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Дорожки скоро на Media3'))))),
-          IconButton(tooltip: 'Полный экран', icon: Icon(ref.watch(fullscreenProvider) ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded, color: Colors.white), onPressed: _toggleFullscreen),
-        ]),
-      ),
-    );
+    return Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.65), Colors.transparent])), child: Row(children: [
+      Expanded(child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white))),
+      _speedMenu(context, player),
+      if (!isAndroid) ...[IconButton(tooltip: 'Аудиодорожка', icon: const Icon(Icons.audiotrack_rounded, color: Colors.white), onPressed: () => _audioTrackMenu(context, player)), IconButton(tooltip: 'Субтитры', icon: const Icon(Icons.subtitles_outlined, color: Colors.white), onPressed: () => _subtitleMenu(context, player))] else Tooltip(message: 'Дорожки/субтитры — позже', child: IconButton(icon: const Icon(Icons.subtitles_outlined, color: Colors.white38), onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Дорожки скоро на Media3'))))),
+      IconButton(tooltip: 'Полный экран', icon: Icon(ref.watch(fullscreenProvider) ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded, color: Colors.white), onPressed: _toggleFullscreen),
+    ]));
   }
 
   Widget _speedMenu(BuildContext context, PlayerController player) {
@@ -396,28 +315,20 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     if (chosen is String && chosen=='off') await player.selectSubtitleOff(); else if (chosen is String && chosen=='external') { const typeGroup = XTypeGroup(label:'Субтитры', extensions:['srt','ass','ssa','vtt']); try { final file = await openFile(acceptedTypeGroups:[typeGroup]); if (file!=null) await player.loadExternalSubtitle(file.path); } catch(_){} } else if (chosen is SubtitleTrack) await player.selectSubtitleTrack(chosen);
   }
 
-  Widget _gestureOverlay(IconData icon, String value, String label) {
-    return Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(12)), child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: Colors.white, size: 18), const SizedBox(width: 8), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)), Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13))])]));
-  }
-
   Widget _bottomBar(BuildContext context, PlayerController player) {
     final theme = Theme.of(context);
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTap: () => _toggleControls(player),
-      child: Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Colors.black.withOpacity(0.70), Colors.black.withOpacity(0.20), Colors.transparent])), child: Column(children: [
-        SeekBar(position: player.position, duration: player.duration, onSeek: (d) { player.seek(d); _showControls(player); }, compact: true), const SizedBox(height:2),
-        Row(children: [
-          IconButton(tooltip:'Предыдущий', onPressed: () { player.prev(); _showControls(player); }, icon: const Icon(Icons.skip_previous_rounded, color: Colors.white)),
-          GestureDetector(onTap: () { player.togglePlay(); _showControls(player); }, child: Container(width:52, height:52, decoration: BoxDecoration(color: theme.colorScheme.primary, shape: BoxShape.circle), child: Icon(player.isPlaying?Icons.pause_rounded:Icons.play_arrow_rounded, color: Colors.black, size:30))),
-          IconButton(tooltip:'Следующий', onPressed: () { player.next(manual:true); _showControls(player); }, icon: const Icon(Icons.skip_next_rounded, color: Colors.white)),
-          const SizedBox(width:4),
-          IconButton(tooltip:'Без звука', onPressed: () { player.toggleMute(); _showControls(player); }, icon: Icon(player.muted||player.volume==0?Icons.volume_off_rounded:Icons.volume_up_rounded, color: Colors.white, size:20)),
-          SizedBox(width:110, child: SliderTheme(data: SliderTheme.of(context).copyWith(trackHeight:3, thumbShape: const RoundSliderThumbShape(enabledThumbRadius:6), overlayShape: const RoundSliderOverlayShape(overlayRadius:10)), child: Slider(value: player.volume.clamp(0,100), max:100, onChanged: (v) { player.setVolume(v); _showControls(player); }, activeColor: theme.colorScheme.primary, inactiveColor: Colors.white24))),
-          const Spacer(),
-          IconButton(tooltip:'Полный экран', onPressed: _toggleFullscreen, icon: Icon(ref.watch(fullscreenProvider)?Icons.fullscreen_exit_rounded:Icons.fullscreen_rounded, color: Colors.white)),
-        ]),
-      ])),
-    );
+    return Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Colors.black.withOpacity(0.65), Colors.transparent])), child: Column(children: [
+      SeekBar(position: player.position, duration: player.duration, onSeek: player.seek, compact: true), const SizedBox(height:2),
+      Row(children: [
+        IconButton(tooltip:'Предыдущий', onPressed: player.prev, icon: const Icon(Icons.skip_previous_rounded, color: Colors.white)),
+        GestureDetector(onTap: player.togglePlay, child: Container(width:52, height:52, decoration: BoxDecoration(color: theme.colorScheme.primary, shape: BoxShape.circle), child: Icon(player.isPlaying?Icons.pause_rounded:Icons.play_arrow_rounded, color: Colors.black, size:30))),
+        IconButton(tooltip:'Следующий', onPressed: ()=>player.next(manual:true), icon: const Icon(Icons.skip_next_rounded, color: Colors.white)),
+        const SizedBox(width:4),
+        IconButton(tooltip:'Без звука', onPressed: player.toggleMute, icon: Icon(player.muted||player.volume==0?Icons.volume_off_rounded:Icons.volume_up_rounded, color: Colors.white, size:20)),
+        SizedBox(width:110, child: SliderTheme(data: SliderTheme.of(context).copyWith(trackHeight:3, thumbShape: const RoundSliderThumbShape(enabledThumbRadius:6), overlayShape: const RoundSliderOverlayShape(overlayRadius:10)), child: Slider(value: player.volume.clamp(0,100), max:100, onChanged: player.setVolume, activeColor: theme.colorScheme.primary, inactiveColor: Colors.white24))),
+        const Spacer(),
+        IconButton(tooltip:'Полный экран', onPressed: _toggleFullscreen, icon: Icon(ref.watch(fullscreenProvider)?Icons.fullscreen_exit_rounded:Icons.fullscreen_rounded, color: Colors.white)),
+      ]),
+    ]));
   }
 }
