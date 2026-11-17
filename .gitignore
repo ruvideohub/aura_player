@@ -1,0 +1,19 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+*.iml
+.idea/
+.vscode/
+
+# Платформенные артефакты
+android/.gradle/
+android/local.properties
+android/key.properties
+windows/flutter/ephemeral/
+
+# Прочее
+*.log
+.DS_Store
