@@ -63,7 +63,7 @@ Future<void> main(List<String> args) async {
         size: Size(1280, 820),
         minimumSize: Size(1000, 680),
         center: true,
-        backgroundColor: Colors.transparent,
+        backgroundColor: Color(0xFF0A0A0A),
         titleBarStyle: TitleBarStyle.hidden,
       ),
       () async {

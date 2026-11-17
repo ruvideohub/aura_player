@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/formatters.dart';
+import '../../state/player_controller.dart';
 
 /// Ползунок прогресса с метками времени.
 class SeekBar extends StatelessWidget {
@@ -61,6 +63,28 @@ class SeekBar extends StatelessWidget {
         if (showTimes)
           SizedBox(width: 44, child: Text(fmtTime(duration), style: style, textAlign: TextAlign.end)),
       ],
+    );
+  }
+}
+
+/// Живой сикбар — позиция через Stream, чтобы не перестраивать весь AppShell каждую секунду.
+/// duration всё ещё через provider select (меняется редко — только при смене трека).
+class LiveSeekBar extends ConsumerWidget {
+  final bool compact;
+  final bool showTimes;
+  const LiveSeekBar({super.key, this.compact = false, this.showTimes = true});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final duration = ref.watch(playerProvider.select((p) => p.duration));
+    final player = ref.read(playerProvider);
+    return StreamBuilder<Duration>(
+      stream: player.positionStream,
+      initialData: player.position,
+      builder: (_, snap) {
+        final pos = snap.data ?? player.position;
+        return SeekBar(position: pos, duration: duration, onSeek: player.seek, compact: compact, showTimes: showTimes);
+      },
     );
   }
 }

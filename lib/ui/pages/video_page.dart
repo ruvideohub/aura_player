@@ -139,15 +139,16 @@ class _VideoPageState extends ConsumerState<VideoPage> {
 
   @override
   Widget build(BuildContext context) {
-    final player = ref.watch(playerProvider);
-    final current = player.current;
+    final current = ref.watch(playerProvider.select((p) => p.current));
+    final hasVideo = ref.watch(playerProvider.select((p) => p.hasVideo));
+    final player = ref.read(playerProvider);
     ref.listen(playerProvider.select((p) => p.current?.path), (prev, next) {
-      if (next != null && player.hasVideo) _showControls(player);
+      if (next != null && hasVideo) _showControls(player);
     });
     ref.listen(playerProvider.select((p) => p.isPlaying), (prev, playing) {
       if (playing == true) _scheduleHide(player);
     });
-    if (current != null && player.hasVideo) {
+    if (current != null && hasVideo) {
       return _videoPlayer(context, player, current);
     }
     return _videoLibrary(context, player);
@@ -158,7 +159,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     return ColoredBox(
       color: Colors.black,
       child: Stack(fit: StackFit.expand, children: [
-        Positioned.fill(child: ColoredBox(color: Colors.black, child: player.buildVideoView(fit: fit))),
+        Positioned.fill(child: RepaintBoundary(child: ColoredBox(color: Colors.black, child: player.buildVideoView(fit: fit)))),
         // Твой Compose-оверлей — без белого, жесты под панелями
         Positioned.fill(
           child: PlayerGestureOverlay(
@@ -250,9 +251,9 @@ class _VideoPageState extends ConsumerState<VideoPage> {
         const SizedBox(height: 8),
         Padding(padding: const EdgeInsets.symmetric(horizontal: 4), child: Text('${list.length} видео · ${fmtSize(list.fold<int>(0, (s, t) => s + t.sizeBytes))}', style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.55)))),
         const SizedBox(height: 4),
-        Expanded(child: list.isEmpty ? Center(child: Text('Ничего не найдено', style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.5)))) : GridView.builder(gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: MediaQuery.of(context).size.width > 900 ? 3 : (MediaQuery.of(context).size.width > 600 ? 2 : 1), childAspectRatio: 1.55, mainAxisSpacing: 12, crossAxisSpacing: 12), itemCount: list.length, itemBuilder: (context, i) {
+        Expanded(child: list.isEmpty ? Center(child: Text('Ничего не найдено', style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.5)))) : GridView.builder(cacheExtent: 600, addAutomaticKeepAlives: false, addRepaintBoundaries: true, gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: MediaQuery.of(context).size.width > 900 ? 3 : (MediaQuery.of(context).size.width > 600 ? 2 : 1), childAspectRatio: 1.55, mainAxisSpacing: 12, crossAxisSpacing: 12), itemCount: list.length, itemBuilder: (context, i) {
           final t = list[i];
-          return Card(clipBehavior: Clip.antiAlias, child: InkWell(onTap: () => ref.read(playerProvider).open(list, i), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          return RepaintBoundary(child: Card(clipBehavior: Clip.antiAlias, child: InkWell(onTap: () => ref.read(playerProvider).open(list, i), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Expanded(child: Stack(children: [
               Positioned.fill(child: VideoThumb(path: t.path)),
               Center(child: Icon(Icons.play_circle_fill_rounded, size: 48, color: Colors.white.withOpacity(0.95))),
@@ -337,18 +338,32 @@ class _VideoPageState extends ConsumerState<VideoPage> {
 
   Widget _bottomBar(BuildContext context, PlayerController player) {
     final theme = Theme.of(context);
-    return Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Colors.black.withOpacity(0.65), Colors.transparent])), child: Column(children: [
-      SeekBar(position: player.position, duration: player.duration, onSeek: player.seek, compact: true), const SizedBox(height:2),
+    final isPlaying = ref.watch(playerProvider.select((p) => p.isPlaying));
+    final muted = ref.watch(playerProvider.select((p) => p.muted));
+    final volume = ref.watch(playerProvider.select((p) => p.volume));
+    return Container(padding: const EdgeInsets.fromLTRB(16, 4, 16, 10), color: Colors.black.withOpacity(0.55), child: Column(children: [
+      const LiveSeekBar(compact: true), const SizedBox(height:2),
       Row(children: [
         IconButton(tooltip:'Предыдущий', onPressed: player.prev, icon: const Icon(Icons.skip_previous_rounded, color: Colors.white)),
-        GestureDetector(onTap: player.togglePlay, child: Container(width:52, height:52, decoration: BoxDecoration(color: theme.colorScheme.primary, shape: BoxShape.circle), child: Icon(player.isPlaying?Icons.pause_rounded:Icons.play_arrow_rounded, color: Colors.black, size:30))),
+        GestureDetector(onTap: player.togglePlay, child: Container(width:52, height:52, decoration: BoxDecoration(color: theme.colorScheme.primary, shape: BoxShape.circle), child: Icon(isPlaying?Icons.pause_rounded:Icons.play_arrow_rounded, color: Colors.black, size:30))),
         IconButton(tooltip:'Следующий', onPressed: ()=>player.next(manual:true), icon: const Icon(Icons.skip_next_rounded, color: Colors.white)),
         const SizedBox(width:4),
-        IconButton(tooltip:'Без звука', onPressed: player.toggleMute, icon: Icon(player.muted||player.volume==0?Icons.volume_off_rounded:Icons.volume_up_rounded, color: Colors.white, size:20)),
-        SizedBox(width:110, child: SliderTheme(data: SliderTheme.of(context).copyWith(trackHeight:3, thumbShape: const RoundSliderThumbShape(enabledThumbRadius:6), overlayShape: const RoundSliderOverlayShape(overlayRadius:10)), child: Slider(value: player.volume.clamp(0,100), max:100, onChanged: player.setVolume, activeColor: theme.colorScheme.primary, inactiveColor: Colors.white24))),
+        IconButton(tooltip:'Без звука', onPressed: player.toggleMute, icon: Icon(muted||volume==0?Icons.volume_off_rounded:Icons.volume_up_rounded, color: Colors.white, size:20)),
+        SizedBox(width:110, child: _VideoVolumeSlider(volume: volume, player: player)),
         const Spacer(),
         IconButton(tooltip:'Полный экран', onPressed: _toggleFullscreen, icon: Icon(ref.watch(fullscreenProvider)?Icons.fullscreen_exit_rounded:Icons.fullscreen_rounded, color: Colors.white)),
       ]),
     ]));
+  }
+
+}
+
+class _VideoVolumeSlider extends StatelessWidget {
+  final double volume; final PlayerController player;
+  const _VideoVolumeSlider({required this.volume, required this.player});
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SliderTheme(data: const SliderThemeData(trackHeight:3, thumbShape: RoundSliderThumbShape(enabledThumbRadius:6), overlayShape: RoundSliderOverlayShape(overlayRadius:10)), child: Slider(value: volume.clamp(0,100), max:100, onChanged: player.setVolume, activeColor: theme.colorScheme.primary, inactiveColor: Colors.white24));
   }
 }

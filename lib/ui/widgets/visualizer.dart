@@ -67,12 +67,17 @@ class _VisualizerState extends State<Visualizer> with SingleTickerProviderStateM
   void _sync() {
     if (widget.playing) {
       _tryStartReal();
-      if (!_hasReal && !_fakeCtrl.isAnimating) _fakeCtrl.repeat();
+      if (!_hasReal && !_fakeCtrl.isAnimating) {
+        // на ПК снижаем частоту до 30fps чтобы не жарить CPU
+        if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+          _fakeCtrl.repeat(period: const Duration(milliseconds: 33));
+        } else {
+          _fakeCtrl.repeat();
+        }
+      }
     } else {
-      // пауза — останавливаем реальный, затухаем фейк
       _stopReal();
       if (_fakeCtrl.isAnimating) _fakeCtrl.stop();
-      // плавно гасим уровни
       setState(() => _levels = _levels.map((e) => (e * 0.3).clamp(0.04, 1.0)).toList());
     }
   }
@@ -218,15 +223,17 @@ class _RealVizPainter extends CustomPainter {
           Rect.fromLTWH(x, h - bh, barW, bh),
           Radius.circular(barW / 2),
         );
-        // градиент по высоте для красоты
-        final grad = LinearGradient(
-          begin: Alignment.bottomCenter,
-          end: Alignment.topCenter,
-          colors: [color, color.withOpacity(0.6)],
-        ).createShader(Rect.fromLTWH(x, h - bh, barW, bh));
-        paint.shader = grad;
-        canvas.drawRRect(rrect, paint);
-        paint.shader = null;
+        final isDesktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+        if (isDesktop) {
+          paint.color = color.withOpacity(opacity * (0.7 + 0.3 * v));
+          paint.shader = null;
+          canvas.drawRRect(rrect, paint);
+        } else {
+          final grad = LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [color, color.withOpacity(0.6)]).createShader(Rect.fromLTWH(x, h - bh, barW, bh));
+          paint.shader = grad;
+          canvas.drawRRect(rrect, paint);
+          paint.shader = null;
+        }
       }
     } else if (mode == VisualizerMode.wave) {
       if (wave != null && wave!.isNotEmpty) {
@@ -247,14 +254,15 @@ class _RealVizPainter extends CustomPainter {
           ..strokeJoin = StrokeJoin.round;
         canvas.drawPath(path, p2);
 
-        // тень
-        final shadow = Paint()
-          ..color = color.withOpacity(opacity * 0.18)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 8
-          ..strokeCap = StrokeCap.round
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
-        canvas.drawPath(path, shadow);
+        if (!(Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
+          final shadow = Paint()
+            ..color = color.withOpacity(opacity * 0.18)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 8
+            ..strokeCap = StrokeCap.round
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+          canvas.drawPath(path, shadow);
+        }
       } else {
         // фоллбек волна — старый фейк
         final paint2 = Paint()
@@ -279,25 +287,27 @@ class _RealVizPainter extends CustomPainter {
       final bass = levels.isEmpty ? 0.3 : levels.take(6).fold(0.0, (a, b) => a + b) / 6;
       final pulse = playing ? 1 + 0.18 * bass : 1.0;
       paint.style = PaintingStyle.fill;
-      // свечение
-      final glow = Paint()
-        ..color = color.withOpacity(opacity * 0.18)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
-      canvas.drawCircle(center, r0 * pulse * 1.35, glow);
+      final isDesktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+      if (!isDesktop) {
+        final glow = Paint()
+          ..color = color.withOpacity(opacity * 0.18)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
+        canvas.drawCircle(center, r0 * pulse * 1.35, glow);
+      }
       canvas.drawCircle(center, r0 * pulse, paint);
       final dotPaint = Paint()..color = color.withOpacity(opacity * 0.85);
-      const dots = 36;
+      final dots = isDesktop ? 20 : 36;
       for (var i = 0; i < dots; i++) {
         final lvl = i < levels.length ? levels[i % levels.length] : 0.3;
         final angle = 2 * math.pi * i / dots + (playing ? DateTime.now().millisecondsSinceEpoch / 1200 : 0);
         final r = r0 * (1.55 + 0.55 * lvl);
         final p = center + Offset(math.cos(angle) * r, math.sin(angle) * r * 0.8);
-        final rad = 1.8 + lvl * 3.5;
+        final rad = isDesktop ? 1.5 + lvl * 2.5 : 1.8 + lvl * 3.5;
         canvas.drawCircle(p, rad, dotPaint);
       }
     }
   }
 
   @override
-  bool shouldRepaint(covariant _RealVizPainter oldDelegate) => true;
+  bool shouldRepaint(covariant _RealVizPainter oldDelegate) => oldDelegate.levels != levels || oldDelegate.wave != wave || oldDelegate.playing != playing || oldDelegate.t != t;
 }

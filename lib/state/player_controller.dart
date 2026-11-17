@@ -160,6 +160,8 @@ class PlayerController extends ChangeNotifier {
 
   Duration _position = Duration.zero;
   Duration get position => _position;
+  // Отдельный notifier для частых тиков позиции — не триггерит весь UI через ChangeNotifier
+  final ValueNotifier<Duration> positionTick = ValueNotifier(Duration.zero);
 
   Duration _duration = Duration.zero;
   Duration get duration => _duration;
@@ -557,16 +559,16 @@ class PlayerController extends ChangeNotifier {
 
   void _onPosition(Duration d) {
     _position = d;
+    // частые тики идут через ValueNotifier / Stream, а не через главный notifyListeners
+    // чтобы AppShell / списки не перестраивались каждую секунду
+    try { positionTick.value = d; } catch (_) {}
     if (d.inSeconds != _lastSavedSec) {
       _lastSavedSec = d.inSeconds;
-      notifyListeners();
+      // сохраняем позицию каждые 5 сек без перестройки UI
       final t = current;
       if (t != null && _lastSavedSec % 5 == 0 && _duration > Duration.zero) {
         _library.savePosition(t.path, _lastSavedSec);
       }
-    } else {
-      // всё равно обновляем позицию для seekbar плавности, но без notify?
-      // для видео нужен частый апдейт — но throttle раз в 250мс уже есть
     }
   }
 
@@ -686,6 +688,7 @@ class PlayerController extends ChangeNotifier {
   @override
   void dispose() {
     _sleepTimer?.cancel();
+    try { positionTick.dispose(); } catch (_) {}
     for (final s in _subs) {
       s.cancel();
     }

@@ -382,19 +382,23 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
   Widget build(BuildContext context) {
     final pageIndex = ref.watch(pageProvider);
     final fullscreen = ref.watch(fullscreenProvider);
-    final player = ref.watch(playerProvider);
+    final hasVideo = ref.watch(playerProvider.select((p) => p.hasVideo));
+    final currentPath = ref.watch(playerProvider.select((p) => p.current?.path));
 
     // В PiP — показываем только видео без контролов
-    if (_inPip && player.hasVideo) {
+    if (_inPip && hasVideo) {
+      final player = ref.read(playerProvider);
       return Scaffold(
         backgroundColor: Colors.black,
-        body: Center(child: player.buildVideoView(fit: ref.watch(videoFitProvider))),
+        body: Center(child: RepaintBoundary(child: player.buildVideoView(fit: ref.watch(videoFitProvider)))),
       );
     }
 
     return LayoutBuilder(builder: (context, constraints) {
       final wide = constraints.maxWidth >= 980;
-      final showMiniPlayer = _shouldShowMiniPlayer(pageIndex, player, fullscreen);
+      // селективный расчёт mini-player — без подписки на позицию/громкость
+      final hasCurrent = currentPath != null;
+      final showMiniPlayer = _shouldShowMiniPlayerSelective(pageIndex, hasCurrent, hasVideo, fullscreen);
 
       ref.listen(playerProvider.select((p) => p.hasVideo), (prev, next) {
         if (next == true && !fullscreen) ref.read(pageProvider.notifier).state = 1;
@@ -434,7 +438,10 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
       Widget shell = Column(children: [
         if (!fullscreen && _isDesktop) _TitleBar(onPickFiles: _pickFiles),
         Expanded(child: ColoredBox(color: pageIndex == 1 ? Colors.black : Colors.transparent, child: content)),
-        if (showMiniPlayer) SizedBox(height: 76, child: _MiniPlayer(compact: !wide, onOpenPlayer: () { ref.read(pageProvider.notifier).state = player.hasVideo ? 1 : 0; })),
+        if (showMiniPlayer) SizedBox(height: 76, child: _MiniPlayer(compact: !wide, onOpenPlayer: () {
+          final hv = ref.read(playerProvider).hasVideo;
+          ref.read(pageProvider.notifier).state = hv ? 1 : 0;
+        })),
         if (!fullscreen && !wide) SizedBox(height: 80, child: _MobileNav(selected: pageIndex)),
       ]);
 
@@ -461,6 +468,14 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
     if (player.current == null) return false;
     if (pageIndex == 0 && !player.hasVideo) return false;
     if (pageIndex == 1 && player.hasVideo) return false;
+    return true;
+  }
+
+  bool _shouldShowMiniPlayerSelective(int pageIndex, bool hasCurrent, bool hasVideo, bool fullscreen) {
+    if (fullscreen) return false;
+    if (!hasCurrent) return false;
+    if (pageIndex == 0 && !hasVideo) return false;
+    if (pageIndex == 1 && hasVideo) return false;
     return true;
   }
 }
@@ -529,36 +544,58 @@ class _Sidebar extends ConsumerWidget {
   }
 }
 
-// ---------------- Мини-плеер ----------------
+// ---------------- Мини-плеер — оптимизирован: селектив + LiveSeekBar + RepaintBoundary ----------------
 class _MiniPlayer extends ConsumerWidget {
   final bool compact; final VoidCallback onOpenPlayer;
   const _MiniPlayer({required this.compact, required this.onOpenPlayer});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final player = ref.watch(playerProvider);
+    final current = ref.watch(playerProvider.select((p) => p.current));
+    if (current == null) return const SizedBox.shrink();
     final theme = Theme.of(context);
     final accent = theme.colorScheme.primary;
-    final t = player.current!;
-    return Container(height: 76, decoration: BoxDecoration(color: theme.brightness == Brightness.dark ? Colors.black.withOpacity(0.55) : Colors.white.withOpacity(0.7), border: Border(top: BorderSide(color: theme.dividerColor))), child: Row(children: [
-      const SizedBox(width: 12),
-      GestureDetector(onTap: onOpenPlayer, child: CoverArt(track: t, size: 48, radius: 10)),
-      const SizedBox(width: 12),
-      Expanded(flex: compact ? 4 : 3, child: GestureDetector(onTap: onOpenPlayer, behavior: HitTestBehavior.opaque, child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)), Text(t.artist.isEmpty ? 'AURA Player' : t.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.55)))]))),
-      Expanded(flex: compact ? 5 : 4, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: SeekBar(position: player.position, duration: player.duration, onSeek: player.seek, compact: true))),
-      IconButton(tooltip: 'Предыдущий (P)', onPressed: player.prev, icon: const Icon(Icons.skip_previous_rounded)),
-      _PlayButton(size: 44),
-      IconButton(tooltip: 'Следующий (N)', onPressed: () => player.next(manual: true), icon: const Icon(Icons.skip_next_rounded)),
-      if (!compact) Padding(padding: const EdgeInsets.only(left: 4, right: 12), child: Row(children: [IconButton(tooltip: 'Без звука (M)', onPressed: player.toggleMute, icon: Icon(player.muted || player.volume == 0 ? Icons.volume_off_rounded : Icons.volume_up_rounded, size: 20)), SizedBox(width: 100, child: SliderTheme(data: SliderTheme.of(context).copyWith(trackHeight: 3, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6), overlayShape: const RoundSliderOverlayShape(overlayRadius: 10)), child: Slider(value: player.volume.clamp(0, 100), max: 100, onChanged: player.setVolume, activeColor: accent)))])),
-    ]));
+    final t = current;
+    final player = ref.read(playerProvider);
+    final muted = ref.watch(playerProvider.select((p) => p.muted));
+    final volume = ref.watch(playerProvider.select((p) => p.volume));
+    return RepaintBoundary(
+      child: Container(height: 76, decoration: BoxDecoration(color: theme.brightness == Brightness.dark ? Colors.black.withOpacity(0.55) : Colors.white.withOpacity(0.7), border: Border(top: BorderSide(color: theme.dividerColor))), child: Row(children: [
+        const SizedBox(width: 12),
+        GestureDetector(onTap: onOpenPlayer, child: CoverArt(track: t, size: 48, radius: 10)),
+        const SizedBox(width: 12),
+        Expanded(flex: compact ? 4 : 3, child: GestureDetector(onTap: onOpenPlayer, behavior: HitTestBehavior.opaque, child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)), Text(t.artist.isEmpty ? 'AURA Player' : t.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: Color(0x8A000000)))]))),
+        const Expanded(flex: 5, child: Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: LiveSeekBar(compact: true))),
+        IconButton(tooltip: 'Предыдущий (P)', onPressed: player.prev, icon: const Icon(Icons.skip_previous_rounded)),
+        const _PlayButton(size: 44),
+        IconButton(tooltip: 'Следующий (N)', onPressed: () => player.next(manual: true), icon: const Icon(Icons.skip_next_rounded)),
+        if (!compact) Padding(padding: const EdgeInsets.only(left: 4, right: 12), child: Row(children: [
+          IconButton(tooltip: 'Без звука (M)', onPressed: player.toggleMute, icon: Icon(muted || volume == 0 ? Icons.volume_off_rounded : Icons.volume_up_rounded, size: 20)),
+          SizedBox(width: 100, child: _VolumeSliderCompact()),
+        ])),
+      ])),
+    );
   }
 }
+
+class _VolumeSliderCompact extends ConsumerWidget {
+  const _VolumeSliderCompact();
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final volume = ref.watch(playerProvider.select((p) => p.volume));
+    final accent = Theme.of(context).colorScheme.primary;
+    final player = ref.read(playerProvider);
+    return SliderTheme(data: const SliderThemeData(trackHeight: 3, thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6), overlayShape: RoundSliderOverlayShape(overlayRadius: 10)), child: Slider(value: volume.clamp(0, 100), max: 100, onChanged: player.setVolume, activeColor: accent, inactiveColor: Colors.white24));
+  }
+}
+
 class _PlayButton extends ConsumerWidget {
   final double size; const _PlayButton({required this.size});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final player = ref.watch(playerProvider);
+    final isPlaying = ref.watch(playerProvider.select((p) => p.isPlaying));
     final accent = Theme.of(context).colorScheme.primary;
-    return GestureDetector(onTap: player.togglePlay, child: Container(width: size, height: size, decoration: BoxDecoration(color: accent, shape: BoxShape.circle, boxShadow: [BoxShadow(color: accent.withOpacity(0.35), blurRadius: 14, offset: const Offset(0, 3))]), child: Icon(player.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.black, size: size * 0.6)));
+    final player = ref.read(playerProvider);
+    return GestureDetector(onTap: player.togglePlay, child: Container(width: size, height: size, decoration: BoxDecoration(color: accent, shape: BoxShape.circle), child: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.black, size: size * 0.6)));
   }
 }
 

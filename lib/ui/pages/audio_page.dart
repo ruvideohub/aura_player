@@ -28,13 +28,15 @@ class _AudioPageState extends ConsumerState<AudioPage> {
 
   @override
   Widget build(BuildContext context) {
-    final player = ref.watch(playerProvider);
+    final current = ref.watch(playerProvider.select((p) => p.current));
+    final hasVideo = ref.watch(playerProvider.select((p) => p.hasVideo));
+    final player = ref.read(playerProvider);
     final settings = ref.watch(settingsProvider);
     final lib = ref.watch(libraryProvider);
     final theme = Theme.of(context);
 
     // Если есть аудио-трек в плеере — по умолчанию плеер, но можем показать и библиотеку по кнопке
-    if (player.current != null && !player.hasVideo) {
+    if (current != null && !hasVideo) {
       if (_showLibrary) {
         return Column(
           children: [
@@ -75,7 +77,7 @@ class _AudioPageState extends ConsumerState<AudioPage> {
       );
     }
     // Сбрасываем флаг когда плеер остановлен
-    if (_showLibrary && (player.current == null || player.hasVideo)) {
+    if (_showLibrary && (current == null || hasVideo)) {
       WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) setState(() => _showLibrary = false); });
     }
 
@@ -200,43 +202,16 @@ class _AudioPageState extends ConsumerState<AudioPage> {
                 ? Center(
                     child: Text('Ничего не найдено', style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.5))),
                   )
-                : ListView.separated(
-                    itemCount: list.length,
-                    separatorBuilder: (_, __) => Divider(height: 1, color: theme.dividerColor),
-                    itemBuilder: (context, i) {
+                : ListView.builder(cacheExtent: 800, addAutomaticKeepAlives: false, addRepaintBoundaries: true, itemCount: list.length, itemBuilder: (context, i) {
                       final t = list[i];
                       final isCurrent = ref.watch(playerProvider.select((p) => p.current?.path)) == t.path;
-                      return ListTile(
+                      return RepaintBoundary(child: ListTile(
                         leading: CoverArt(track: t, size: 48, radius: 10),
                         title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: isCurrent ? TextStyle(color: accent, fontWeight: FontWeight.w600) : null),
-                        subtitle: Text(
-                          [if (t.artist.isNotEmpty) t.artist, if (t.album.isNotEmpty) t.album].join(' · '),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(fmtTime(Duration(milliseconds: t.durationMs)), style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.5))),
-                            PopupMenuButton<String>(
-                              onSelected: (v) async {
-                                if (v == 'play') await ref.read(playerProvider).open(list, i);
-                                if (v == 'queue') { ref.read(playerProvider).enqueue([t]); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Добавлено в очередь'))); }
-                                if (v == 'playlist') _addToPlaylistDialog(t);
-                                if (v == 'remove') lib.removeTrack(t);
-                              },
-                              itemBuilder: (_) => const [
-                                PopupMenuItem(value: 'play', child: Text('Воспроизвести')),
-                                PopupMenuItem(value: 'queue', child: Text('В очередь')),
-                                PopupMenuItem(value: 'playlist', child: Text('В плейлист')),
-                                PopupMenuItem(value: 'remove', child: Text('Удалить')),
-                              ],
-                            ),
-                          ],
-                        ),
+                        subtitle: Text([if (t.artist.isNotEmpty) t.artist, if (t.album.isNotEmpty) t.album].join(' · '), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+                        trailing: Row(mainAxisSize: MainAxisSize.min, children: [Text(fmtTime(Duration(milliseconds: t.durationMs)), style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.5))), PopupMenuButton<String>(onSelected: (v) async { if (v == 'play') await ref.read(playerProvider).open(list, i); if (v == 'queue') { ref.read(playerProvider).enqueue([t]); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Добавлено в очередь'))); } if (v == 'playlist') _addToPlaylistDialog(t); if (v == 'remove') lib.removeTrack(t); }, itemBuilder: (_) => const [PopupMenuItem(value: 'play', child: Text('Воспроизвести')), PopupMenuItem(value: 'queue', child: Text('В очередь')), PopupMenuItem(value: 'playlist', child: Text('В плейлист')), PopupMenuItem(value: 'remove', child: Text('Удалить'))])]),
                         onTap: () => ref.read(playerProvider).open(list, i),
-                      );
+                      ));
                     },
                   ),
           ),
@@ -327,6 +302,7 @@ class _NowPlaying extends StatelessWidget {
     final theme = Theme.of(context);
     final accent = theme.colorScheme.primary;
     final t = player.current!;
+    // оптимизация: визуализатор в RepaintBoundary, LiveSeekBar через поток
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -352,26 +328,13 @@ class _NowPlaying extends StatelessWidget {
               Text(t.artist.isEmpty ? 'Неизвестный исполнитель' : t.artist, textAlign: TextAlign.center, style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.65))),
               if (t.album.isNotEmpty) Text(t.album, textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: theme.colorScheme.onSurface.withOpacity(0.45))),
               const SizedBox(height: 18),
-              SizedBox(height: 90, child: Visualizer(playing: player.isPlaying, mode: settings.visualizerMode, color: accent, opacity: settings.visualizerOpacity)),
+              RepaintBoundary(child: SizedBox(height: 90, child: Visualizer(playing: ref.watch(playerProvider.select((p)=>p.isPlaying)), mode: settings.visualizerMode, color: accent, opacity: settings.visualizerOpacity))),
               const SizedBox(height: 14),
-              SeekBar(position: player.position, duration: player.duration, onSeek: player.seek),
+              const LiveSeekBar(),
               const SizedBox(height: 6),
-              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                IconButton(tooltip: 'Перемешать (S)', onPressed: player.toggleShuffle, icon: Icon(Icons.shuffle_rounded, color: player.shuffle ? accent : theme.colorScheme.onSurface.withOpacity(0.5))),
-                IconButton(tooltip: 'Предыдущий (P)', onPressed: player.prev, icon: const Icon(Icons.skip_previous_rounded, size: 34)),
-                const SizedBox(width: 6),
-                GestureDetector(onTap: player.togglePlay, child: Container(width: 68, height: 68, decoration: BoxDecoration(color: accent, shape: BoxShape.circle, boxShadow: [BoxShadow(color: accent.withOpacity(0.4), blurRadius: 18, offset: const Offset(0, 4))]), child: Icon(player.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.black, size: 38))),
-                const SizedBox(width: 6),
-                IconButton(tooltip: 'Следующий (N)', onPressed: () => player.next(manual: true), icon: const Icon(Icons.skip_next_rounded, size: 34)),
-                IconButton(tooltip: 'Повтор (L)', onPressed: player.cycleRepeat, icon: Icon(player.repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded, color: player.repeat == RepeatMode.off ? theme.colorScheme.onSurface.withOpacity(0.5) : accent)),
-              ]),
+              const _AudioMainControls(),
               const SizedBox(height: 8),
-              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                PopupMenuButton<double>(tooltip: 'Скорость', onSelected: player.setRate, itemBuilder: (_) => [for (final s in [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]) PopupMenuItem(value: s, child: Text('${s.toStringAsFixed(2)}x'))], child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: BoxDecoration(border: Border.all(color: theme.dividerColor), borderRadius: BorderRadius.circular(999)), child: Text('${player.rate.toStringAsFixed(2)}x', style: const TextStyle(fontSize: 12)))),
-                const SizedBox(width: 12),
-                IconButton(tooltip: 'Без звука (M)', onPressed: player.toggleMute, icon: Icon(player.muted || player.volume == 0 ? Icons.volume_off_rounded : Icons.volume_up_rounded, size: 20)),
-                SizedBox(width: 120, child: SliderTheme(data: SliderTheme.of(context).copyWith(trackHeight: 3, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6), overlayShape: const RoundSliderOverlayShape(overlayRadius: 10)), child: Slider(value: player.volume.clamp(0, 100), max: 100, onChanged: player.setVolume, activeColor: accent))),
-              ]),
+              const _AudioRateVolumeRow(),
             ],
           ),
         ),
@@ -436,5 +399,46 @@ class _QueueView extends StatelessWidget {
       final isCurrent = i == player.index;
       return ReorderableDragStartListener(key: ValueKey(t.path + i.toString()), index: i, child: ListTile(dense: true, leading: Text(isCurrent ? '▶' : '${i + 1}', style: TextStyle(color: isCurrent ? accent : null, fontWeight: FontWeight.bold)), title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: isCurrent ? TextStyle(color: accent, fontWeight: FontWeight.w600) : null), subtitle: Text(t.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)), trailing: IconButton(icon: const Icon(Icons.close_rounded, size: 18), onPressed: () => player.removeFromQueue(i)), onTap: () => player.playAt(i)));
     }))]);
+  }
+}
+
+// Оптимизированные контролы — только нужные селекты перестраиваются
+class _AudioMainControls extends ConsumerWidget {
+  const _AudioMainControls();
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final shuffle = ref.watch(playerProvider.select((p)=>p.shuffle));
+    final repeat = ref.watch(playerProvider.select((p)=>p.repeat));
+    final isPlaying = ref.watch(playerProvider.select((p)=>p.isPlaying));
+    final player = ref.read(playerProvider);
+    final theme = Theme.of(context);
+    final accent = theme.colorScheme.primary;
+    return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+      IconButton(tooltip: 'Перемешать (S)', onPressed: player.toggleShuffle, icon: Icon(Icons.shuffle_rounded, color: shuffle ? accent : theme.colorScheme.onSurface.withOpacity(0.5))),
+      IconButton(tooltip: 'Предыдущий (P)', onPressed: player.prev, icon: const Icon(Icons.skip_previous_rounded, size: 34)),
+      const SizedBox(width: 6),
+      GestureDetector(onTap: player.togglePlay, child: Container(width: 68, height: 68, decoration: BoxDecoration(color: accent, shape: BoxShape.circle), child: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.black, size: 38))),
+      const SizedBox(width: 6),
+      IconButton(tooltip: 'Следующий (N)', onPressed: () => player.next(manual: true), icon: const Icon(Icons.skip_next_rounded, size: 34)),
+      IconButton(tooltip: 'Повтор (L)', onPressed: player.cycleRepeat, icon: Icon(repeat == RepeatMode.one ? Icons.repeat_one_rounded : Icons.repeat_rounded, color: repeat == RepeatMode.off ? theme.colorScheme.onSurface.withOpacity(0.5) : accent)),
+    ]);
+  }
+}
+
+class _AudioRateVolumeRow extends ConsumerWidget {
+  const _AudioRateVolumeRow();
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final rate = ref.watch(playerProvider.select((p)=>p.rate));
+    final muted = ref.watch(playerProvider.select((p)=>p.muted));
+    final volume = ref.watch(playerProvider.select((p)=>p.volume));
+    final player = ref.read(playerProvider);
+    final theme = Theme.of(context);
+    return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+      PopupMenuButton<double>(tooltip: 'Скорость', onSelected: player.setRate, itemBuilder: (_) => [for (final s in [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]) PopupMenuItem(value: s, child: Text('${s.toStringAsFixed(2)}x'))], child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: BoxDecoration(border: Border.all(color: theme.dividerColor), borderRadius: BorderRadius.circular(999)), child: Text('${rate.toStringAsFixed(2)}x', style: const TextStyle(fontSize: 12)))),
+      const SizedBox(width: 12),
+      IconButton(tooltip: 'Без звука (M)', onPressed: player.toggleMute, icon: Icon(muted || volume == 0 ? Icons.volume_off_rounded : Icons.volume_up_rounded, size: 20)),
+      SizedBox(width: 120, child: SliderTheme(data: const SliderThemeData(trackHeight: 3, thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6), overlayShape: RoundSliderOverlayShape(overlayRadius: 10)), child: Slider(value: volume.clamp(0, 100), max: 100, onChanged: player.setVolume, activeColor: theme.colorScheme.primary))),
+    ]);
   }
 }
