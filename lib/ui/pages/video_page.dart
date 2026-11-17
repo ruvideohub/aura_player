@@ -178,30 +178,21 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   }
 
   Widget _videoPlayer(BuildContext context, PlayerController player, MediaTrack current) {
-    // Чёрный бэкграунд на весь экран — убирает белую дымку от Scaffold/theme
-    return Container(
+    // Чёрный Material — убирает белую дымку от Scaffold light-темы.
+    // Центр экрана НИЧЕМ не перекрываем — только Positioned top/bottom.
+    return Material(
       color: Colors.black,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Видео — всегда чёрный фон, без белых полей
+          // Видео — чёрный фон
           Positioned.fill(
             child: ColoredBox(
               color: Colors.black,
               child: player.buildVideoView(),
             ),
           ),
-          // Буферизация
-          StreamBuilder<bool>(
-            stream: player.bufferingStream,
-            builder: (context, snap) {
-              if (snap.data != true) return const SizedBox.shrink();
-              return const Center(
-                child: SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white)),
-              );
-            },
-          ),
-          // Жесты — прозрачный слой без белого фона
+          // Жесты — прозрачный, на весь экран, под контролами
           LayoutBuilder(builder: (context, constraints) {
             return Positioned.fill(
               child: GestureDetector(
@@ -215,55 +206,74 @@ class _VideoPageState extends ConsumerState<VideoPage> {
                 },
                 onVerticalDragStart: (d) => _onVerticalDragStart(d, constraints),
                 onVerticalDragUpdate: (d) => _onVerticalDragUpdate(d, constraints),
-                child: Container(color: Colors.transparent),
+                child: const ColoredBox(color: Colors.transparent),
               ),
             );
           }),
-          // Оверлеи яркости/громкости
+          // Буферизация — поверх видео, под контролами
+          StreamBuilder<bool>(
+            stream: player.bufferingStream,
+            builder: (context, snap) {
+              if (snap.data != true) return const SizedBox.shrink();
+              return const Center(
+                child: SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white)),
+              );
+            },
+          ),
+          // Оверлеи яркости/громкости — маленькие, не на весь экран
           if (_brightnessOverlay != null)
             Positioned(left: 24, top: 80, child: _gestureOverlay(Icons.brightness_6_rounded, '${(_brightnessOverlay! * 100).round()}%', 'Яркость')),
           if (_volumeOverlay != null)
             Positioned(right: 24, top: 80, child: _gestureOverlay(Icons.volume_up_rounded, '${(_volumeOverlay! * 100).round()}%', 'Громкость')),
-          // Контролы — исчезают полностью, без дымки
-          IgnorePointer(
-            ignoring: !_controlsVisible,
-            child: AnimatedOpacity(
-              opacity: _controlsVisible ? 1 : 0,
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOut,
-              child: Container(
-                // Не красим центр — только верх и низ с градиентом, середина прозрачная
-                decoration: const BoxDecoration(color: Colors.transparent),
-                child: Column(children: [
-                  // Верх — градиент чёрный → прозрачный
-                  _topBar(context, player, current),
-                  // Центр — тап уходит в GestureDetector, здесь Spacer
-                  const Spacer(),
-                  // Подсказка — только когда контролы видны, маленькая, внизу
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Center(
+
+          // ——— Контролы: ТОЛЬКО top и bottom, центр НЕ перекрываем ———
+          // Топ-бар
+          Positioned(
+            top: 0, left: 0, right: 0,
+            child: IgnorePointer(
+              ignoring: !_controlsVisible,
+              child: AnimatedOpacity(
+                opacity: _controlsVisible ? 1 : 0,
+                duration: const Duration(milliseconds: 180),
+                child: _topBar(context, player, current),
+              ),
+            ),
+          ),
+          // Низ — hint + кнопка выхода + bottomBar — один блок
+          Positioned(
+            left: 0, right: 0, bottom: 0,
+            child: IgnorePointer(
+              ignoring: !_controlsVisible,
+              child: AnimatedOpacity(
+                opacity: _controlsVisible ? 1 : 0,
+                duration: const Duration(milliseconds: 180),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Подсказка — над bottomBar, полупрозрачная, не дымка
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
                       child: Text(
                         'Свайп ↑↓ слева — яркость, справа — громкость • двойной тап — фуллскрин',
                         style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 10),
                         textAlign: TextAlign.center,
                       ),
                     ),
-                  ),
-                  if (ref.watch(fullscreenProvider))
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Center(
-                        child: FilledButton.icon(
-                          onPressed: _toggleFullscreen,
-                          icon: const Icon(Icons.fullscreen_exit_rounded, size: 18),
-                          label: const Text('Выйти из полного экрана', style: TextStyle(fontSize: 13)),
-                          style: FilledButton.styleFrom(backgroundColor: Colors.black87, foregroundColor: Colors.white),
+                    if (ref.watch(fullscreenProvider))
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Center(
+                          child: FilledButton.icon(
+                            onPressed: _toggleFullscreen,
+                            icon: const Icon(Icons.fullscreen_exit_rounded, size: 18),
+                            label: const Text('Выйти из полного экрана', style: TextStyle(fontSize: 13)),
+                            style: FilledButton.styleFrom(backgroundColor: Colors.black87, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
+                          ),
                         ),
                       ),
-                    ),
-                  _bottomBar(context, player),
-                ]),
+                    _bottomBar(context, player),
+                  ],
+                ),
               ),
             ),
           ),
