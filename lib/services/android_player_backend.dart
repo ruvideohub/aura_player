@@ -197,10 +197,11 @@ class AndroidPlayerBackend {
   Widget buildVideoView({bool fitCover = false}) {
     final c = _controller;
     if (c == null || !c.value.isInitialized) {
-      return const ColoredBox(color: Colors.black);
+      // Непрозрачный чёрный — чтобы не просвечивал scaffold #F6F5F2
+      return const ColoredBox(color: Colors.black, child: SizedBox.expand());
     }
     final player = VideoPlayer(c);
-    final wrapped = Container(
+    return ColoredBox(
       color: Colors.black,
       child: fitCover
           ? SizedBox.expand(
@@ -220,7 +221,6 @@ class AndroidPlayerBackend {
               ),
             ),
     );
-    return wrapped;
   }
 
   Future<void> _disposeController() async {

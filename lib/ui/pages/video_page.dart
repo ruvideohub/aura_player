@@ -178,20 +178,22 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   }
 
   Widget _videoPlayer(BuildContext context, PlayerController player, MediaTrack current) {
-    // Чёрный Material — убирает белую дымку от Scaffold light-темы.
-    // Центр экрана НИЧЕМ не перекрываем — только Positioned top/bottom.
-    return Material(
+    // Принудительно чёрный — Scaffold light даёт #F6F5F2, Material наследует — отсюда белая дымка.
+    // Делаем ColoredBox+Theme.dark, без Material.
+    return ColoredBox(
       color: Colors.black,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Видео — чёрный фон
-          Positioned.fill(
-            child: ColoredBox(
-              color: Colors.black,
-              child: player.buildVideoView(),
+      child: Theme(
+        data: ThemeData.dark(useMaterial3: true),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // Видео — чёрный фон, video_player за ним
+            Positioned.fill(
+              child: ColoredBox(
+                color: Colors.black,
+                child: player.buildVideoView(),
+              ),
             ),
-          ),
           // Жесты — прозрачный слой на весь экран (под контролами).
           // Тап центр — показать/скрыть, двойной тап — фуллскрин / перемотка, свайпы —
           // горизонталь = перемотка, вертикаль слева = яркость, справа = громкость.
@@ -245,7 +247,6 @@ class _VideoPageState extends ConsumerState<VideoPage> {
             Positioned(right: 24, top: 80, child: _gestureOverlay(Icons.volume_up_rounded, '${(_volumeOverlay! * 100).round()}%', 'Громкость')),
 
           // ——— Контролы: ТОЛЬКО top и bottom, центр НЕ перекрываем ———
-          // Топ-бар
           Positioned(
             top: 0, left: 0, right: 0,
             child: IgnorePointer(
@@ -257,7 +258,6 @@ class _VideoPageState extends ConsumerState<VideoPage> {
               ),
             ),
           ),
-          // Низ — hint + кнопка выхода + bottomBar — один блок
           Positioned(
             left: 0, right: 0, bottom: 0,
             child: IgnorePointer(
@@ -268,7 +268,6 @@ class _VideoPageState extends ConsumerState<VideoPage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Подсказка — над bottomBar, полупрозрачная, не дымка
                     Padding(
                       padding: const EdgeInsets.only(bottom: 4),
                       child: Text(
@@ -295,7 +294,8 @@ class _VideoPageState extends ConsumerState<VideoPage> {
               ),
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }
