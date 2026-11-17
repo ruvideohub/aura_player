@@ -11,6 +11,15 @@ class VideoThumb extends StatefulWidget {
   State<VideoThumb> createState() => _VideoThumbState();
 }
 
+class _ThumbCache {
+  static final Map<String, Uint8List?> _mem = {};
+  static Uint8List? get(String k) => _mem[k];
+  static void set(String k, Uint8List? v) {
+    if (_mem.length > 200) _mem.clear();
+    _mem[k] = v;
+  }
+}
+
 class _VideoThumbState extends State<VideoThumb> {
   Uint8List? _bytes;
   bool _loading = true;
@@ -32,7 +41,20 @@ class _VideoThumbState extends State<VideoThumb> {
   }
 
   Future<void> _load() async {
+    final cached = _ThumbCache.get(widget.path);
+    if (cached != null) {
+      if (!mounted) return;
+      setState(() { _bytes = cached; _loading = false; });
+      return;
+    }
+    // если в кэше null (уже пробовали и нет миниатюры) — не грузим повторно
+    if (_ThumbCache._mem.containsKey(widget.path)) {
+      if (!mounted) return;
+      setState(() { _loading = false; });
+      return;
+    }
     final b = await NativeBridge.videoThumb(widget.path);
+    _ThumbCache.set(widget.path, b);
     if (!mounted) return;
     setState(() { _bytes = b; _loading = false; });
   }

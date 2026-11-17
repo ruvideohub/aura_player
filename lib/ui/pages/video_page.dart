@@ -154,13 +154,11 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   }
 
   Widget _videoPlayer(BuildContext context, PlayerController player, MediaTrack current) {
-    // УЛЬТРА-МИНИМАЛКА: только видео, без единого оверлея — чтобы проверить, белый от UI или от самого видео
-    // Если после этого белый останется — это интро видео, а не наш косяк
-    // Жесты и контролы временно отключены, только видео
+    final fit = ref.watch(videoFitProvider);
     return ColoredBox(
       color: Colors.black,
       child: Stack(fit: StackFit.expand, children: [
-        Positioned.fill(child: ColoredBox(color: Colors.black, child: player.buildVideoView())),
+        Positioned.fill(child: ColoredBox(color: Colors.black, child: player.buildVideoView(fit: fit))),
         // Твой Compose-оверлей — без белого, жесты под панелями
         Positioned.fill(
           child: PlayerGestureOverlay(
@@ -300,7 +298,22 @@ class _VideoPageState extends ConsumerState<VideoPage> {
   Widget _topBar(BuildContext context, PlayerController player, MediaTrack t) {
     final isAndroid = player.isAndroid;
     return Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.65), Colors.transparent])), child: Row(children: [
-      IconButton(tooltip: 'Закрыть', icon: const Icon(Icons.close_rounded, color: Colors.white), onPressed: () async { await player.stopAndClearCurrent(); if (mounted) _hideTimer?.cancel(); }),
+      IconButton(tooltip: 'Закрыть', icon: const Icon(Icons.close_rounded, color: Colors.white), onPressed: () async {
+        // выход из фуллскрина + остановка
+        if (ref.read(fullscreenProvider)) {
+          ref.read(fullscreenProvider.notifier).state = false;
+          if (_isDesktop) {
+            try { await windowManager.setFullScreen(false); } catch (_) {}
+          } else {
+            try {
+              await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+              await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp, DeviceOrientation.portraitDown, DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
+            } catch (_) {}
+          }
+        }
+        await player.stopAndClearCurrent();
+        if (mounted) _hideTimer?.cancel();
+      }),
       Expanded(child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white))),
       _fitMenu(context),
       _speedMenu(context, player),

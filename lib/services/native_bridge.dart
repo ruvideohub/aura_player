@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
+import 'package:flutter_video_thumbnail_plus/flutter_video_thumbnail_plus.dart';
 
 /// Мост к нативному Kotlin-слою (Android).
 /// На Windows и других платформах все методы безопасно возвращают пустой
@@ -97,8 +98,29 @@ class NativeBridge {
     try { await _channel.invokeMethod('setVolume', {'value': v}); } catch (_) {}
   }
   static Future<Uint8List?> videoThumb(String path) async {
-    if (!isAndroid) return null;
-    try { return await _channel.invokeMethod<Uint8List>('videoThumb', {'path': path}); } catch (_) { return null; }
+    // Android — через Kotlin MediaMetadataRetriever
+    if (isAndroid) {
+      try { return await _channel.invokeMethod<Uint8List>('videoThumb', {'path': path}); } catch (_) { return null; }
+    }
+    // Desktop (Windows/macOS/Linux) — через flutter_video_thumbnail_plus
+    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('content://')) return null;
+    final f = File(path);
+    if (!f.existsSync()) return null;
+    final ext = path.split('.').last.toLowerCase().split('?').first.split('#').first;
+    const noThumb = {'m3u8', 'mpd', 'm3u', 'm4s', 'fmp4'};
+    if (noThumb.contains(ext)) return null;
+    try {
+      final data = await FlutterVideoThumbnailPlus.thumbnailData(
+        video: path,
+        imageFormat: ImageFormat.jpeg,
+        maxWidth: 320,
+        quality: 75,
+        timeMs: 1200,
+      );
+      return data;
+    } catch (_) {
+      return null;
+    }
   }
 
   // ── Уведомление / фон (только музыка) ───────────────────────
