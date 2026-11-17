@@ -172,6 +172,30 @@ class _VideoPageState extends ConsumerState<VideoPage> {
       child: Stack(children: [
         // Видео — один слой, без дублирования, с выбранным aspect ratio
         Positioned.fill(child: player.buildVideoView(fit: fit)),
+        // Диагностика: если видео не рендерится — покажем размеры/состояние (тап по центру)
+        Positioned(
+          left: 8, top: 8,
+          child: IgnorePointer(
+            child: StreamBuilder<Duration>(
+              stream: player.positionStream,
+              builder: (ctx, posSnap) {
+                final pos = posSnap.data ?? player.position;
+                final dur = player.duration;
+                // Desktop: можно показать width/height из player.state
+                String extra = '';
+                try {
+                  final w = (player as dynamic).videoController != null ? 'vc:ok' : 'vc:null';
+                  extra = ' $w';
+                } catch (_) {}
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
+                  child: Text('${current.ext.toUpperCase()} ${dur.inSeconds}s ${pos.inSeconds}s$extra', style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                );
+              },
+            ),
+          ),
+        ),
         // Жесты поверх видео
         Positioned.fill(
           child: PlayerGestureOverlay(

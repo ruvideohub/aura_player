@@ -63,7 +63,7 @@ class PlayerController extends ChangeNotifier {
       videoController = VideoController(
         player,
         configuration: VideoControllerConfiguration(
-          enableHardwareAcceleration: true,
+          enableHardwareAcceleration: false,
         ),
       );
       _androidBackend = null;
