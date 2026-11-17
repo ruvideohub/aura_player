@@ -152,6 +152,6 @@ class SettingsController extends ChangeNotifier {
 }
 
 /// Создаётся в main() через override с готовым SharedPreferences.
-final settingsProvider = Provider<SettingsController>((ref) {
+final settingsProvider = ChangeNotifierProvider<SettingsController>((ref) {
   throw UnimplementedError('settingsProvider переопределяется в main()');
 });

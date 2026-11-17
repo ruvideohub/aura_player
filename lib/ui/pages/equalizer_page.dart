@@ -111,68 +111,67 @@ class EqualizerPage extends ConsumerWidget {
                         ],
                       ),
                       const SizedBox(height: 20),
-                      GridView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount:
-                              MediaQuery.of(context).size.width > 760 ? 2 : 1,
-                          childAspectRatio: 7.2,
-                          mainAxisSpacing: 4,
-                          crossAxisSpacing: 24,
-                        ),
-                        itemCount: 10,
-                        itemBuilder: (context, i) {
-                          final g = settings.eqGains[i];
-                          return Row(
-                            children: [
-                              SizedBox(
-                                width: 58,
-                                child: Text(
-                                  fmtFreq(eqFrequencies[i]),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: theme.colorScheme.onSurface
-                                        .withOpacity(0.6),
-                                  ),
+                      // Вместо GridView — Column, чтобы не ломать hit-test на Android
+                      Column(
+                        children: [
+                          for (var i = 0; i < 10; i++)
+                            Builder(builder: (context) {
+                              final g = settings.eqGains[i];
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 2),
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 58,
+                                      child: Text(
+                                        fmtFreq(eqFrequencies[i]),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: theme.colorScheme.onSurface
+                                              .withOpacity(0.6),
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Slider(
+                                        min: -12,
+                                        max: 12,
+                                        divisions: 24,
+                                        value: g,
+                                        label: fmtGain(g),
+                                        onChanged: settings.eqEnabled
+                                            ? (v) {
+                                                final list = List.of(settings.eqGains);
+                                                list[i] = v;
+                                                settings.setEqGains(list);
+                                                apply();
+                                              }
+                                            : null,
+                                        activeColor: accent,
+                                      ),
+                                    ),
+                                    SizedBox(
+                                      width: 58,
+                                      child: Text(
+                                        fmtGain(g),
+                                        textAlign: TextAlign.end,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontFeatures: const [
+                                            FontFeature.tabularFigures()
+                                          ],
+                                          color: g != 0
+                                              ? accent
+                                              : theme.colorScheme.onSurface
+                                                  .withOpacity(0.55),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                              Expanded(
-                                child: Slider(
-                                  min: -12,
-                                  max: 12,
-                                  divisions: 24,
-                                  value: g,
-                                  label: fmtGain(g),
-                                  onChanged: (v) {
-                                    final list = List.of(settings.eqGains);
-                                    list[i] = v;
-                                    settings.setEqGains(list);
-                                    apply();
-                                  },
-                                  activeColor: accent,
-                                ),
-                              ),
-                              SizedBox(
-                                width: 58,
-                                child: Text(
-                                  fmtGain(g),
-                                  textAlign: TextAlign.end,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontFeatures: const [
-                                      FontFeature.tabularFigures()
-                                    ],
-                                    color: g != 0
-                                        ? accent
-                                        : theme.colorScheme.onSurface
-                                            .withOpacity(0.55),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          );
-                        },
+                              );
+                            }),
+                        ],
                       ),
                       // Bass Boost — системный (Android audiofx)
                       if (NativeBridge.isAndroid) ...[
