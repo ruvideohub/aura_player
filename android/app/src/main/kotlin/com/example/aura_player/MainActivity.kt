@@ -208,32 +208,6 @@ class MainActivity : FlutterActivity() {
                 "getInitialOpen" -> {
                     result.success(pendingOpenPath)
                 }
-
-                // ── VK: реальная идентификация устройства (A.b.y в LKMP) ──
-                // android_id из Settings.Secure + Build.* — чтобы device_id и UA
-                // выглядели как у настоящего устройства, а не как у подставного
-                // Nexus 5X (главная причина антифрод-капчи при авторизации).
-                "deviceIdentity" -> {
-                    val map = HashMap<String, String>()
-                    try {
-                        map["androidId"] = android.provider.Settings.Secure.getString(
-                            contentResolver, android.provider.Settings.Secure.ANDROID_ID
-                        ) ?: ""
-                    } catch (_: Throwable) { map["androidId"] = "" }
-                    map["model"] = Build.MODEL ?: ""
-                    map["manufacturer"] = Build.MANUFACTURER ?: ""
-                    map["brand"] = Build.BRAND ?: ""
-                    map["buildId"] = Build.ID ?: ""
-                    map["type"] = Build.TYPE ?: ""
-                    map["abi"] = if (Build.SUPPORTED_ABIS.isNotEmpty()) Build.SUPPORTED_ABIS[0] else ""
-                    // os.arch — именно System.getProperty("os.arch") (aarch64/x86_64),
-                    // как в A.b.y()/A.b.x() LKMP: SUPPORTED_ABIS[0] ("arm64-v8a") даёт
-                    // ДРУГОЙ device_id-хеш, и VK видит неизвестное устройство → капча.
-                    map["arch"] = try { System.getProperty("os.arch") ?: "" } catch (_: Throwable) { "" }
-                    map["osRelease"] = Build.VERSION.RELEASE ?: ""
-                    map["sdkInt"] = Build.VERSION.SDK_INT.toString()
-                    result.success(map)
-                }
                 else -> result.notImplemented()
             }
         }

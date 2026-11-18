@@ -11,7 +11,7 @@ import '../../../services/library.dart';
 import '../../../services/settings.dart';
 import '../../../models/models.dart';
 import '../../../state/player_controller.dart';
-import '../vk_lkmp_auth_page.dart';
+import '../vk_auth_page.dart';
 
 final sharedPrefsProvider = Provider<SharedPreferences>((ref) => throw UnimplementedError('sharedPrefsProvider not overridden in main'));
 
@@ -192,7 +192,7 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
             },
             tabs: const [Tab(text: 'Моя'), Tab(text: 'Популярное'), Tab(text: 'Поиск')],
           ),
-          Expanded(child: VkLkmpAuthPage(onSuccess: () => setState(() {}))),
+          Expanded(child: VkAuthPage(onSuccess: () => setState(() {}))),
         ],
       );
     }
@@ -320,126 +320,3 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
   }
 }
 
-class _LoginView extends ConsumerStatefulWidget {
-  final VoidCallback onLogin;
-  const _LoginView({required this.onLogin});
-  @override
-  ConsumerState<_LoginView> createState() => _LoginViewState();
-}
-
-class _LoginViewState extends ConsumerState<_LoginView> {
-  final _login = TextEditingController();
-  final _pass = TextEditingController();
-  final _captcha = TextEditingController();
-  final _code = TextEditingController();
-  bool _loading = false;
-  String? _captchaImg;
-  String? _captchaSid;
-  bool _needCode = false;
-
-  @override
-  void dispose() {
-    _login.dispose();
-    _pass.dispose();
-    _captcha.dispose();
-    _code.dispose();
-    super.dispose();
-  }
-
-  Future<void> _doAuth() async {
-    setState(() => _loading = true);
-    try {
-      final api = ref.read(vkMusicApiProvider);
-      await api.auth(
-        _login.text.trim(),
-        _pass.text,
-        captchaSid: _captchaSid,
-        captchaKey: _captcha.text.trim().isEmpty ? null : _captcha.text.trim(),
-        code: _needCode ? _code.text.trim() : null,
-      );
-      widget.onLogin();
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('VK авторизация OK')));
-    } catch (e) {
-      if (e is VkAuthException) {
-        final p = e.payload;
-        // captcha
-        if (e.captchaImg != null) {
-          setState(() {
-            _captchaImg = e.captchaImg;
-            _captchaSid = e.captchaSid;
-          });
-        }
-        // need_validation / 2FA
-        final needValidation = p['error'] == 'need_validation' || p['validation_type'] != null;
-        if (needValidation) setState(() => _needCode = true);
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
-      } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(Icons.music_note_rounded, size: 64, color: theme.colorScheme.primary),
-            const SizedBox(height: 16),
-            const Text('VK Музыка — вход', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text('Введи логин/пароль VK. Токен сохраняется локально.',
-                textAlign: TextAlign.center, style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.6), fontSize: 12)),
-            const SizedBox(height: 16),
-            TextField(controller: _login, decoration: const InputDecoration(labelText: 'Телефон / email', prefixIcon: Icon(Icons.person_outline))),
-            const SizedBox(height: 8),
-            TextField(controller: _pass, decoration: const InputDecoration(labelText: 'Пароль', prefixIcon: Icon(Icons.lock_outline)), obscureText: true),
-            if (_captchaImg != null) ...[
-              const SizedBox(height: 12),
-              ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(_captchaImg!, height: 50, errorBuilder: (_,__,___)=> const Icon(Icons.image_not_supported))),
-              const SizedBox(height: 8),
-              TextField(controller: _captcha, decoration: const InputDecoration(labelText: 'Код с картинки (капча)', prefixIcon: Icon(Icons.image_outlined))),
-            ],
-            if (_needCode) ...[
-              const SizedBox(height: 12),
-              TextField(controller: _code, decoration: const InputDecoration(labelText: 'Код 2FA / SMS', prefixIcon: Icon(Icons.sms_outlined))),
-            ],
-            const SizedBox(height: 16),
-            _loading
-                ? const CircularProgressIndicator()
-                : SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(onPressed: _doAuth, child: const Text('Войти')),
-                  ),
-            const SizedBox(height: 12),
-            TextButton(
-              onPressed: () async {
-                final c = TextEditingController();
-                final token = await showDialog<String>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('Вставить токен вручную'),
-                    content: TextField(controller: c, decoration: const InputDecoration(hintText: 'access_token')),
-                    actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')), FilledButton(onPressed: () => Navigator.pop(ctx, c.text.trim()), child: const Text('Сохранить'))],
-                  ),
-                );
-                if (token != null && token.isNotEmpty) {
-                  final sp = ref.read(sharedPrefsProvider);
-                  await VkTokenStorage(sp).save(token, 0);
-                  widget.onLogin();
-                }
-              },
-              child: const Text('Вставить токен вручную'),
-            ),
-          ]),
-        ),
-      ),
-    );
-  }
-}

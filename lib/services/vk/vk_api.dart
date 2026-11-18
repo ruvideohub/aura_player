@@ -44,7 +44,7 @@ class VkApi {
   static const oauthScope = 'all';
   static const oauthScopeAudio = 'audio,offline';
 
-  // Фоллбек client_id для неявного токена через WebView/Chrome (vk_auth_page, vk_chrome_auth_page)
+  // Фоллбек client_id для токена через WebView
   static const List<String> oauthFallbackIds = clientIds;
   // scope implicit-token входа для конкретных fallback-клиентов
   static const Map<String, String> oauthFallbackScopes = {
