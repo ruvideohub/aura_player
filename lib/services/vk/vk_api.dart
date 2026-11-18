@@ -30,7 +30,8 @@ class VkApi {
     '6287487',
   ];
 
-  static const oauthClientId = '51858169';
+  // Сайт ВК — единственный незабаненный для авторизации (по просьбе пользователя)
+  static const oauthClientId = '6287487'; // vk.com site, secret QbYic1K3lEV5kTGiqlq2
   static const oauthClientIdCom = '2274003';
   static const oauthScope = 'video,friends,groups,wall';
 
