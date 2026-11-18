@@ -693,33 +693,27 @@ class VkLkmpAuth {
 
   /// POST без следования редиректам: auth_by_exchange_token отвечает 302 с
   /// Location: ...#access_token=... — именно фрагмент и нужно забрать.
+  /// Реализация через http.Request(followRedirects:false) без dart:io.
   Future<String> _postCaptureRedirect(String url, Map<String, String> body) async {
-    final hc = HttpClient()..autoRedirect = false;
-    try {
-      final req = await hc.openUrl('POST', Uri.parse(url));
-      req.headers.set(HttpHeaders.contentTypeHeader,
-          'application/x-www-form-urlencoded; charset=utf-8');
-      req.headers.set(HttpHeaders.cacheControlHeader, 'no-cache');
-      req.headers.set('Accept', 'image/webp');
-      req.headers.set(HttpHeaders.userAgentHeader, _ua());
-      req.headers.set('X-VK-Android-Client', 'new');
-      req.headers.set('X-Screen', 'auth_password');
-      if (_cookies.isNotEmpty) {
-        req.headers.set(HttpHeaders.cookieHeader,
-            _cookies.entries.map((e) => '${e.key}=${e.value}').join('; '));
-      }
-      final encoded =
-          body.entries.map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}').join('&');
-      req.add(utf8.encode(encoded));
-      final resp = await req.close();
-      _rememberCookies(resp.headers.value(HttpHeaders.setCookieHeader));
-      final text = await utf8.decodeStream(resp);
-      final loc = resp.headers.value(HttpHeaders.locationHeader) ?? '';
-      if (loc.contains('#')) return loc.substring(loc.indexOf('#'));
-      if (text.contains('#access_token')) return text.substring(text.indexOf('#'));
-      return text;
-    } finally {
-      hc.close(force: true);
-    }
+    final req = http.Request('POST', Uri.parse(url))
+      ..followRedirects = false
+      ..headers.addAll({
+        'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'Accept': 'image/webp',
+        'User-Agent': _ua(),
+        'X-VK-Android-Client': 'new',
+        'X-Screen': 'auth_password',
+        if (_cookies.isNotEmpty) 'Cookie': _cookies.entries.map((e) => '${e.key}=${e.value}').join('; '),
+      })
+      ..body = body.entries.map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}').join('&');
+    final streamed = await _http.send(req);
+    final resp = await http.Response.fromStream(streamed);
+    _rememberCookies(resp.headers['set-cookie']);
+    final text = resp.body;
+    final loc = resp.headers['location'] ?? '';
+    if (loc.contains('#')) return loc.substring(loc.indexOf('#'));
+    if (text.contains('#access_token')) return text.substring(text.indexOf('#'));
+    return text;
   }
 }
