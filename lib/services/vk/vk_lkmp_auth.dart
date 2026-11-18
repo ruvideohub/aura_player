@@ -27,6 +27,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 ///     исключение — UI показывает капчу вместо «блокировки».
 /// 10. Retry: 3 сетевые попытки (N1.e.e) и до 3 повторов при 1117 с обменом exchange-токена
 ///     (N1_b.java case 0).
+/// 11. getAnonymToken: /oauth/get_anonym_token отвечает ПЛОСКИМ {"token","expired_at"}
+///     (обёртки response нет — она есть только у /method/*), прежняя версия читала только
+///     response.token и всегда падала с «Ошибка получения аноним-токена», хотя сервер
+///     возвращал валидный токен. Добавлены: чтение плоского token, fallback на
+///     /method/auth.getAnonymToken (N1.e.b) и тело ответа VK в тексте ошибки.
 
 // ---------------------------------------------------------------------------
 // Типы результатов и ошибок
@@ -313,8 +318,12 @@ class VkLkmpAuth {
   Future<String> getAnonymToken() async {
     // Нативный initAuth: POST https://api.vk.ru/oauth/get_anonym_token (строка 0x46a0),
     // тело = client_id/secret/lang/https/api_id (0x4640) + &device_id + &v.
-    // /method/auth.getAnonymToken с такими параметрами VK сразу отвечает ошибкой 9.
-    final j = await _post('$_host/oauth/get_anonym_token', {
+    // ВАЖНО (проверено живым запросом 2026-11-18): этот oauth-эндпоинт отвечает
+    // ПЛОСКИМ JSON {"token": "anonym.…", "expired_at": …} — БЕЗ обёртки "response".
+    // Обёртка response есть только у /method/*-эндпоинтов. Прежняя версия читала
+    // только response.token, не находила его и бросала «Ошибка получения аноним-
+    // токена», хотя сервер возвращал валидный токен.
+    Map<String, dynamic> j = await _post('$_host/oauth/get_anonym_token', {
       'client_id': _clientId,
       'client_secret': _clientSecret,
       'lang': 'ru',
@@ -323,14 +332,53 @@ class VkLkmpAuth {
       'device_id': await _deviceId(),
       'v': _v,
     }, 'auth_start_with_phone');
-    final token = j['response'] is Map ? j['response']['token'] : null;
+    dynamic token = j['token'];
+    if (token is! String || token.isEmpty) {
+      final resp = j['response'];
+      if (resp is Map) token = resp['token']; // envelope-формат (на будущее)
+    }
     if (token is String && token.isNotEmpty) {
       _cachedAnon = token;
       _anonTs = DateTime.now().millisecondsSinceEpoch;
       return token;
     }
+    // Fallback: метод-эндпоинт из LKMP-референса (N1.e.b), ответ в response.token.
+    // Проверен живьём: тоже возвращает токен (v=5.276, UA 8.175-51775).
+    try {
+      final j2 = await _post('$_host/method/auth.getAnonymToken', {
+        'client_id': _clientId,
+        'client_secret': _clientSecret,
+        'device_id': await _deviceId(),
+        'lang': 'ru',
+        'v': '5.276',
+        'https': '1',
+        'api_id': _apiId,
+      }, 'auth_start_with_phone');
+      final resp = j2['response'];
+      final t2 = resp is Map ? resp['token'] : null;
+      if (t2 is String && t2.isNotEmpty) {
+        _cachedAnon = t2;
+        _anonTs = DateTime.now().millisecondsSinceEpoch;
+        return t2;
+      }
+      j = j2;
+    } on VkLkmpAuthException {
+      // fallback недоступен — покажем исходный ответ oauth-запроса
+    }
     throw VkLkmpAuthException(
-        kind: 'api', message: 'Ошибка получения аноним-токена', raw: j);
+        kind: 'api',
+        message: 'Ошибка получения аноним-токена: ${_shortBody(j)}',
+        raw: j);
+  }
+
+  /// Короткое тело ответа для текста ошибки — чтобы в UI было видно, что вернул VK.
+  String _shortBody(Map<String, dynamic> j) {
+    try {
+      final s = jsonEncode(j);
+      return s.length > 220 ? '${s.substring(0, 220)}…' : s;
+    } catch (_) {
+      return '$j';
+    }
   }
 
   // -------------------------------------------------------------------------
