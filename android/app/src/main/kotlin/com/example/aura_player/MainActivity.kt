@@ -208,6 +208,28 @@ class MainActivity : FlutterActivity() {
                 "getInitialOpen" -> {
                     result.success(pendingOpenPath)
                 }
+
+                // ── VK: реальная идентификация устройства (A.b.y в LKMP) ──
+                // android_id из Settings.Secure + Build.* — чтобы device_id и UA
+                // выглядели как у настоящего устройства, а не как у подставного
+                // Nexus 5X (главная причина антифрод-капчи при авторизации).
+                "deviceIdentity" -> {
+                    val map = HashMap<String, String>()
+                    try {
+                        map["androidId"] = android.provider.Settings.Secure.getString(
+                            contentResolver, android.provider.Settings.Secure.ANDROID_ID
+                        ) ?: ""
+                    } catch (_: Throwable) { map["androidId"] = "" }
+                    map["model"] = Build.MODEL ?: ""
+                    map["manufacturer"] = Build.MANUFACTURER ?: ""
+                    map["brand"] = Build.BRAND ?: ""
+                    map["buildId"] = Build.ID ?: ""
+                    map["type"] = Build.TYPE ?: ""
+                    map["abi"] = if (Build.SUPPORTED_ABIS.isNotEmpty()) Build.SUPPORTED_ABIS[0] else ""
+                    map["osRelease"] = Build.VERSION.RELEASE ?: ""
+                    map["sdkInt"] = Build.VERSION.SDK_INT.toString()
+                    result.success(map)
+                }
                 else -> result.notImplemented()
             }
         }
