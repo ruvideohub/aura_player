@@ -21,6 +21,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 ///  5. Cookie-хранилище как CookieManager(ACCEPT_ALL) в N1_e.java:96-98.
 ///  6. Пост-логин с получением exchange_token (m1_f.b) — без него refresh невозможен.
 ///  7. refreshByExchangeToken парсит fragment-ответ "#access_token=..." (N1_e.h:346-356).
+///  8. Убран ручной Accept-Encoding: gzip — dart:io сам добавляет gzip и распаковывает,
 ///     иначе тело ответа могло приходить нераспакованным и jsonDecode падал.
 ///  9. Обработка капчи (error_code 14 и need_captcha) и flood (error 9) через типизированное
 ///     исключение — UI показывает капчу вместо «блокировки».
@@ -117,8 +118,13 @@ class VkLkmpAuth {
   static const _clientId = '2274003';
   static const _clientSecret = 'hHbZxrka2uZ6jB1inYsH';
   static const _apiId = '2274003';
-  static const _v = '5.276';
-  static const _sak = '1.144.0';
+  // Значения из нативного слоя libVKMPLite.so (расшифрованные строки 0x4460/0x4710/0x4820):
+  // v=5.205, sak_version=1.123 (oauth sid-флоу), 1.104 (password-grant и refresh),
+  // gaid захардкожен в .so, UA = VKAndroidApp/8.87-21014 (registerDevice app_version=21014).
+  static const _v = '5.205';
+  static const _sak = '1.123';
+  static const _sak104 = '1.104';
+  static const _gaidConst = '236fd493-f8a3-4c52-97d4-acae50a72221';
   static const _flow = 'tg_flow';
   static const _flowNoPwd = 'auth_without_password';
   static const _host = 'https://api.vk.ru'; // НЕ .com и не oauth.vk.ru!
@@ -171,26 +177,14 @@ class VkLkmpAuth {
     return dev;
   }
 
-  /// gaid — не настоящий Advertising ID, а случайный UUID 8-4-4-4-12 (N1.e.g(int)).
-  String _gaid() {
-    String g(int n) =>
-        List.generate(n, (_) => '0123456789abcdef'[Random.secure().nextInt(16)]).join();
-    return '${g(8)}-${g(4)}-${g(4)}-${g(4)}-${g(12)}';
-  }
-
-  Future<String> _gaidStored() async {
-    final p = await SharedPreferences.getInstance();
-    final g = p.getString('vk_lkmp_gaid');
-    if (g != null && g.isNotEmpty) return g;
-    final fresh = _gaid();
-    await p.setString('vk_lkmp_gaid', fresh);
-    return fresh;
-  }
+  /// В нативном слое gaid захардкожен (тела 0x4710/0x4820) — используем то же значение,
+  /// чтобы запросы не отличались от оригинального клиента.
+  Future<String> _gaidStored() async => _gaidConst;
 
   /// A.b.x(): VKAndroidApp/8.175-51775 (Android <RELEASE>; SDK <SDK>; <arch>; <MODEL>; <lang>; WxH).
   /// При сбое в LKMP — константа 8.87-21014; здесь один динамический вариант.
   String _ua() =>
-      'VKAndroidApp/8.175-51775 (Android 12; SDK 31; arm64-v8a;Google Nexus 5X; ru; 1920x1080)';
+      'VKAndroidApp/8.87-21014 (Android 12; SDK 31; arm64-v8a;Google Nexus 5X; ru; 1920x1080)';
 
   String _randHex(int len) =>
       List.generate(len, (_) => '0123456789abcdef'[Random.secure().nextInt(16)]).join();
@@ -222,7 +216,9 @@ class VkLkmpAuth {
   Map<String, String> _headers(String screen) => {
         if (screen.isNotEmpty) 'X-Screen': screen,
         'Cache-Control': 'no-cache',
+        'X-Get-Processing-Time': '1',
         'Accept': 'image/webp',
+        // Accept-Encoding НЕ ставим вручную: dart:io HttpClient сам добавляет gzip
         // и сам распаковывает ответ. Ручной заголовок приводил к бинарному r.body.
         'User-Agent': _ua(),
         'X-VK-Android-Client': 'new',
@@ -315,14 +311,17 @@ class VkLkmpAuth {
   }
 
   Future<String> getAnonymToken() async {
-    final j = await _post('$_host/method/auth.getAnonymToken', {
+    // Нативный initAuth: POST https://api.vk.ru/oauth/get_anonym_token (строка 0x46a0),
+    // тело = client_id/secret/lang/https/api_id (0x4640) + &device_id + &v.
+    // /method/auth.getAnonymToken с такими параметрами VK сразу отвечает ошибкой 9.
+    final j = await _post('$_host/oauth/get_anonym_token', {
       'client_id': _clientId,
       'client_secret': _clientSecret,
-      'device_id': await _deviceId(),
       'lang': 'ru',
-      'v': _v,
       'https': '1',
       'api_id': _apiId,
+      'device_id': await _deviceId(),
+      'v': _v,
     }, 'auth_start_with_phone');
     final token = j['response'] is Map ? j['response']['token'] : null;
     if (token is String && token.isNotEmpty) {
@@ -348,15 +347,13 @@ class VkLkmpAuth {
     final res = await _post('$_host/method/auth.validateAccount', {
       'login': phone,
       'access_token': anon,
-      'supported_ways':
-          'push,email,sms,callreset,password,reserve_code,codegen,official_messenger,max_code,passkey,libverify,max_messenger',
+      'supported_ways': 'push,email,sms,callreset,password,reserve_code,codegen',
       'force_password': '0',
       'flow_type': _flowNoPwd,
       'sak_version': _sak,
       'gaid': await _gaidStored(),
       'device_id': await _deviceId(),
       'lang': 'ru',
-      'v': _v,
       'https': '1',
       'api_id': _apiId,
       if (captcha != null && captchaKey.isNotEmpty) ..._captchaParams(captcha, captchaKey),
@@ -388,7 +385,6 @@ class VkLkmpAuth {
       'sak_version': _sak,
       'flow_type': _flow,
       'gaid': await _gaidStored(),
-      'v': _v,
       'https': '1',
       'api_id': _apiId,
     }, 'auth');
@@ -413,7 +409,6 @@ class VkLkmpAuth {
       'sak_version': _sak,
       'flow_type': _flow,
       'gaid': await _gaidStored(),
-      'v': _v,
       'https': '1',
       'api_id': _apiId,
     }, 'auth');
@@ -453,7 +448,6 @@ class VkLkmpAuth {
       'sak_version': _sak,
       'flow_type': _flow,
       'gaid': await _gaidStored(),
-      'v': _v,
       'https': '1',
       'api_id': _apiId,
       if (captcha != null && captchaKey.isNotEmpty) ..._captchaParams(captcha, captchaKey),
@@ -479,27 +473,50 @@ class VkLkmpAuth {
     String captchaKey = '',
   }) async {
     final anon = await _cachedAnonToken();
-    final res = await _post('$_host/oauth/token', {
-      'sid': sid,
-      'username': login,
-      'password': password,
-      'anonymous_token': anon,
-      'libverify_support': '1',
-      'scope': 'all',
-      'device_trusted_hash_supported': '1',
-      'grant_type': 'phone_confirmation_sid',
-      '2fa_supported': '1',
-      'supported_ways': 'push,email',
-      'lang': 'ru',
-      'device_id': await _deviceId(),
-      'sak_version': _sak,
-      'flow_type': _flow,
-      'gaid': await _gaidStored(),
-      'v': _v,
-      'https': '1',
-      'api_id': _apiId,
-      if (captcha != null && captchaKey.isNotEmpty) ..._captchaParams(captcha, captchaKey),
-    }, 'auth_password');
+    // Нативные тела oauth/token из libVKMPLite.so:
+    //  0x4710 (пароль): grant_type=password, sak_version=1.104, v=5.205,
+    //                   flow_type=auth_without_password, gaid захардкожен;
+    //  0x4460 (по sid после OTP): grant_type=phone_confirmation_sid, sak_version=1.123,
+    //                   flow_type=tg_flow, device_id + device_trusted_hash_supported.
+    final Map<String, String> params;
+    if (password.isEmpty) {
+      params = {
+        'libverify_support': '1',
+        'scope': 'all',
+        'device_id': await _deviceId(),
+        'device_trusted_hash_supported': '1',
+        'grant_type': 'phone_confirmation_sid',
+        'sid': sid,
+        'anonymous_token': anon,
+        '2fa_supported': '1',
+        'supported_ways': 'push,email',
+        'https': '1',
+        'lang': 'ru',
+        'sak_version': _sak,
+        'flow_type': _flow,
+        'api_id': _apiId,
+        if (captcha != null && captchaKey.isNotEmpty) ..._captchaParams(captcha, captchaKey),
+      };
+    } else {
+      params = {
+        'libverify_support': '1',
+        'grant_type': 'password',
+        '2fa_supported': '1',
+        'flow_type': _flowNoPwd,
+        'supported_ways': 'push,email',
+        'sak_version': _sak104,
+        'gaid': await _gaidStored(),
+        'lang': 'ru',
+        'scope': 'all',
+        'https': '1',
+        'api_id': _apiId,
+        'v': _v,
+        'username': login,
+        'password': password,
+        if (captcha != null && captchaKey.isNotEmpty) ..._captchaParams(captcha, captchaKey),
+      };
+    }
+    final res = await _post('$_host/oauth/token', params, 'auth_password');
 
     // Ошибки oauth — строкой в корне ответа (не API-конверт): need_captcha,
     // need_validation, invalid_client (m1_f.a:100-140).
@@ -643,17 +660,20 @@ class VkLkmpAuth {
         prefs.getString('vk_exchange_token') ?? prefs.getString('vk_lkmp_exchange') ?? '';
     if (ex.isEmpty) return null;
 
+    // Тело из нативного слоя (0x4820): lang=en, v=5.205, sak_version=1.104, gaid const,
+    // initiator=expired_token; exchange_token/device_id добавляются как в N1.e.h.
     final body = {
-      'lang': 'ru',
+      'lang': 'en',
       'https': '1',
-      'api_id': _apiId,
-      'client_id': _clientId,
-      'initiator': 'expired_token',
-      'gaid': await _gaidStored(),
-      'exchange_token': ex,
-      'scope': 'all',
-      'device_id': await _deviceId(),
       'v': _v,
+      'client_id': _clientId,
+      'scope': 'all',
+      'initiator': 'expired_token',
+      'sak_version': _sak104,
+      'gaid': await _gaidStored(),
+      'api_id': _apiId,
+      'exchange_token': ex,
+      'device_id': await _deviceId(),
     };
     final raw = await _postCaptureRedirect('$_host/oauth/auth_by_exchange_token', body);
 
@@ -693,7 +713,6 @@ class VkLkmpAuth {
 
   /// POST без следования редиректам: auth_by_exchange_token отвечает 302 с
   /// Location: ...#access_token=... — именно фрагмент и нужно забрать.
-  /// Реализация через http.Request(followRedirects:false) без dart:io.
   Future<String> _postCaptureRedirect(String url, Map<String, String> body) async {
     final req = http.Request('POST', Uri.parse(url))
       ..followRedirects = false

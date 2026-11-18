@@ -44,6 +44,17 @@ class VkApi {
   static const oauthScope = 'all';
   static const oauthScopeAudio = 'audio,offline';
 
+  // Фоллбек client_id для неявного токена через WebView/Chrome (vk_auth_page, vk_chrome_auth_page)
+  static const List<String> oauthFallbackIds = clientIds;
+  // scope implicit-token входа для конкретных fallback-клиентов
+  static const Map<String, String> oauthFallbackScopes = {
+    '6287487': 'video,offline', // сайт / VK Video
+    '51858169': 'video,offline', // VK Video
+    '6121396': 'audio,offline', // Kate Mobile
+  };
+  // scope по умолчанию, если клиент не указан в таблице выше
+  static const String oauthScopeSite = 'video,friends,groups,wall,offline';
+
   // Заголовки маскировки под официальное приложение
   static Map<String, String> get kateHeaders => {
         'User-Agent': kateUserAgent,

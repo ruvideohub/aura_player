@@ -17,11 +17,16 @@ class VkAccountManager {
 
   static const _userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150.0.0.0 Safari/537.36';
 
+  /// HTTP-клиент по умолчанию (vk_auth_page создаёт VkAccountManager(http.Client()))
+  final http.Client? _injectedClient;
+
+  VkAccountManager([this._injectedClient]);
+
   VkAuthSession? _session;
   VkAuthSession? get session => _session;
 
-  Future<void> restore() async {
-    final p = await SharedPreferences.getInstance();
+  Future<void> restore([SharedPreferences? prefs]) async {
+    final p = prefs ?? await SharedPreferences.getInstance();
     final access = p.getString('vk_account_state_secure_$_kAccess') ?? '';
     if (access.isEmpty) return;
     _session = VkAuthSession(
@@ -45,22 +50,22 @@ class VkAccountManager {
 
   String? currentToken() => _session?.accessToken.isNotEmpty == true ? _session!.accessToken : null;
 
-  Future<({String authorizeUrl, String state})> startLogin({int langId = 0, String scheme = 'space_gray'}) async {
+  Future<({String authorizeUrl, String state})> startLogin({int langId = 0, String scheme = 'space_gray', SharedPreferences? prefs, String? clientIdOverride}) async {
     final verifier = VkAuthCore.generateCodeVerifier();
     final challenge = VkAuthCore.generateCodeChallenge(verifier);
     final state = VkAuthCore.generateState();
-    final p = await SharedPreferences.getInstance();
+    final p = prefs ?? await SharedPreferences.getInstance();
     await p.setString('vk_account_state_secure_$_kPendingVerifier', verifier);
     await p.setString('vk_account_state_secure_$_kPendingState', state);
-    final url = VkApi.oauthAuthorizeUrl(codeChallenge: challenge, state: state, langId: langId, scheme: scheme);
+    final url = VkApi.oauthAuthorizeUrl(codeChallenge: challenge, state: state, langId: langId, scheme: scheme, clientId: clientIdOverride ?? VkApi.oauthClientId);
     return (authorizeUrl: url, state: state);
   }
 
   /// Перехваченный redirect → обмен кода на токен. null = успех, иначе текст ошибки.
-  Future<String?> handleRedirect(String redirectUrl, {http.Client? client}) async {
+  Future<String?> handleRedirect(String redirectUrl, {http.Client? client, SharedPreferences? prefs}) async {
     final parsed = VkAuthCore.parseRedirect(redirectUrl);
     if (parsed == null) return 'Это не redirect авторизации VK';
-    final p = await SharedPreferences.getInstance();
+    final p = prefs ?? await SharedPreferences.getInstance();
     final expected = p.getString('vk_account_state_secure_$_kPendingState') ?? '';
     if (!VkAuthCore.validateState(expected, parsed.state)) return 'Подмена redirect: state не совпал';
     final verifier = p.getString('vk_account_state_secure_$_kPendingVerifier') ?? '';
@@ -102,14 +107,14 @@ class VkAccountManager {
     await p.remove('vk_account_state_secure_$_kUserId');
     if (s != null) {
       try {
-        final c = client ?? http.Client();
+        final c = client ?? _injectedClient ?? http.Client();
         await c.post(Uri.parse(VkApi.hostOAuthLogout), headers: {'User-Agent': _userAgent}, body: {'client_id': VkApi.oauthClientId, 'access_token': s.accessToken}).timeout(const Duration(seconds: 8));
       } catch (_) {}
     }
   }
 
   Future<Map<String, dynamic>> _executeOauth(Map<String, String> body, {http.Client? client}) async {
-    final c = client ?? http.Client();
+    final c = client ?? _injectedClient ?? http.Client();
     final resp = await c.post(Uri.parse(VkApi.hostOAuthToken), headers: {'User-Agent': _userAgent}, body: body).timeout(const Duration(seconds: 12));
     final text = resp.body;
     final json = text.isEmpty ? <String, dynamic>{} : jsonDecode(text) as Map<String, dynamic>;
