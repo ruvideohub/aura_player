@@ -230,6 +230,16 @@ class MainActivity : FlutterActivity() {
                     map["sdkInt"] = Build.VERSION.SDK_INT.toString()
                     result.success(map)
                 }
+                // WebView куки после смарт-капчи — Дарт их не видит, а VK без них
+                // снова шлёт капчу. Синхронизируем CookieManager → _cookies.
+                "getWebViewCookies" -> {
+                    val url = call.argument<String>("url") ?: "https://vk.ru/"
+                    try {
+                        val cm = android.webkit.CookieManager.getInstance()
+                        val c = try { cm.getCookie(url) ?: "" } catch (_: Throwable) { "" }
+                        result.success(c)
+                    } catch (_: Throwable) { result.success("") }
+                }
                 else -> result.notImplemented()
             }
         }

@@ -294,6 +294,23 @@ class VkLkmpAuth {
     }
   }
 
+  /// Куки из WebView после смарт-капчи — синхронизируем с _cookies.
+  void adoptCookies(String raw) {
+    if (raw.isEmpty) return;
+    for (final chunk in raw.split(';')) {
+      final eq = chunk.indexOf('=');
+      if (eq <= 0) continue;
+      final k = chunk.substring(0, eq).trim();
+      final v = chunk.substring(eq + 1).trim().split(';').first.trim();
+      if (k.isEmpty) continue;
+      if (v == 'DELETED') {
+        _cookies.remove(k);
+        continue;
+      }
+      _cookies[k] = v;
+    }
+  }
+
   Future<Map<String, String>> _headers(String screen) async {
     await _ensureIdentity();
     return {
