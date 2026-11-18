@@ -12,20 +12,21 @@ class VkApi {
   static const oauthRedirectUri = 'https://oauth.vk.ru/blank.html';
   static const hostOAuthAuthorize = 'https://oauth.vk.com/authorize';
 
-  static const v = '5.199';
+  // Сайт vk.ru — как в твоём vk.zip, только клиент как у сайта
+  static const v = '5.289'; // как в queue.subscribe?v=5.289
   static const vFallback = '5.131';
+  static const hostSiteApi = 'https://web.api.vk.ru';
 
-  // vkvideoapp — VK Video (рабочий, не Кейт, не сайт)
-  static const oauthClientId = '52461373';
+  // vk.ru web клиент из queue.subscribe — ты вытащил 7879029
+  static const oauthClientId = '7879029';
   static const oauthScope = 'audio,video,offline,friends,groups,wall';
 
   static const List<String> clientIds = [
-    '52461373', // vkvideoapp — primary
+    '7879029', // сайт vk.ru web — primary как просил
+    '52461373',
     '51703666',
     '51858169',
     '2274003',
-    '3140623',
-    '6287487',
   ];
 
   // Методы
