@@ -573,7 +573,7 @@ class _MiniPlayer extends ConsumerWidget {
         GestureDetector(onTap: onOpenPlayer, child: CoverArt(track: t, size: 48, radius: 10)),
         const SizedBox(width: 12),
         Expanded(flex: compact ? 4 : 3, child: GestureDetector(onTap: onOpenPlayer, behavior: HitTestBehavior.opaque, child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)), Text(t.artist.isEmpty ? 'AURA Player' : t.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: Color(0x8A000000)))]))),
-        const Expanded(flex: 5, child: Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: LiveSeekBar(compact: true))),
+        Expanded(flex: 5, child: Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: LiveSeekBar(compact: true))),
         IconButton(tooltip: 'Предыдущий (P)', onPressed: player.prev, icon: const Icon(Icons.skip_previous_rounded)),
         const _PlayButton(size: 44),
         IconButton(tooltip: 'Следующий (N)', onPressed: () => player.next(manual: true), icon: const Icon(Icons.skip_next_rounded)),

@@ -330,7 +330,7 @@ class _NowPlaying extends StatelessWidget {
               const SizedBox(height: 18),
               RepaintBoundary(child: SizedBox(height: 90, child: Visualizer(playing: player.isPlaying, mode: settings.visualizerMode, color: accent, opacity: settings.visualizerOpacity))),
               const SizedBox(height: 14),
-              const LiveSeekBar(),
+              LiveSeekBar(),
               const SizedBox(height: 6),
               const _AudioMainControls(),
               const SizedBox(height: 8),
