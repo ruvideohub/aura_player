@@ -30,16 +30,16 @@ class VkApi {
     '6287487',
   ];
 
-  // Авторизация как сайт — через vk.ru / oauth.vk.ru (не сторонний vk video)
-  static const oauthClientId = '6287487'; // vk.com site
+  // vk.ru web — реальный client_id из браузера (ты вытащил 7879029)
+  static const oauthClientId = '7879029'; // web.api.vk.ru queue.subscribe
   static const oauthClientIdCom = '2274003';
   static const oauthScope = 'video,friends,groups,wall';
   static const oauthScopeSite = 'audio,video,offline,friends,groups,wall';
   static const hostOAuthAuthorizeSite = 'https://oauth.vk.com/authorize';
   static const hostOAuthAuthorizeSiteRu = 'https://oauth.vk.ru/authorize';
-  // Для vk.ru пробуем оба хоста oauth.vk.com и oauth.vk.ru
-  static const oauthFallbackIds = <String>[]; // сайт — единственный, фоллбеки отключены по твоей просьбе
+  static const oauthFallbackIds = <String>['6287487']; // фоллбек на старый site
   static const oauthFallbackScopes = {
+    '7879029': 'audio,video,offline,friends,groups,wall',
     '6287487': 'audio,video,offline,friends,groups,wall',
   };
 
@@ -197,14 +197,12 @@ class VkApi {
     String prompt = 'login',
     String clientId = oauthClientId,
   }) {
-    // Сайт — как в браузере: oauth.vk.com / oauth.vk.ru implicit token (ты проверил 1a/1b — работают с 405)
     final scope = oauthFallbackScopes[clientId] ?? oauthScopeSite;
-    final host = (clientId == '6287487') ? hostOAuthAuthorizeSite : hostOAuthAuthorizeSite;
-    // Для vk.ru пробуем oauth.vk.ru если oauth.vk.com даст Unknown method — переключим хост в фоллбеке
+    final host = hostOAuthAuthorizeSite; // oauth.vk.com — как в браузере 7879029 тоже редиректит на id.vk.com/auth
     final params = {
       'client_id': clientId,
       'scope': scope,
-      'redirect_uri': oauthRedirectUri, // https://oauth.vk.ru/blank.html — как ты тестил в браузере
+      'redirect_uri': oauthRedirectUri,
       'display': 'mobile',
       'response_type': 'token',
       'v': vFallback,
