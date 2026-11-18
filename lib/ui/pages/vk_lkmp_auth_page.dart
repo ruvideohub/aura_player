@@ -54,7 +54,18 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
     setState(() => _loading = true);
     try {
       final res = await _auth.validateAccount(phone: _loginCtrl.text.trim());
-      // res содержит sid / next_step / verification_method
+      // LKMP: сначала проверяем error
+      if (res['error'] != null) {
+        final err = res['error'] as Map;
+        final code = err['error_code'] as int? ?? 0;
+        if (code == 9) {
+          // Flood — точно как у LKMP, только человеческий текст
+          setState(() => _info = 'Слишком много попыток. Подождите 2–3 минуты и попробуйте снова.\nLKMP тоже ловит это при спаме — у него тот же error 9, просто он ставит задержку.');
+          return;
+        }
+        setState(() => _info = '${err['error_text'] ?? err['error_msg'] ?? err}');
+        return;
+      }
       final resp = res['response'] ?? res;
       _sid = resp['sid']?.toString() ?? '';
       if (resp['next_step'] != null) {
@@ -67,6 +78,13 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
       }
       // пробуем getVerificationMethods
       final vmRes = await _auth.getVerificationMethods(sid: _sid);
+      if (vmRes['error'] != null) {
+        final err = vmRes['error'] as Map;
+        if (err['error_code'] == 9) {
+          setState(() => _info = 'Слишком много попыток. Подождите пару минут — VK ограничил частоту.');
+          return;
+        }
+      }
       final list = (vmRes['response']?['verification_methods'] as List?) ?? [];
       if (list.isNotEmpty) {
         setState(() {
@@ -75,8 +93,11 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
           _title = 'Выберите способ подтверждения';
           _info = '';
         });
+      } else if (_sid.isNotEmpty) {
+        // fallback: если sid есть — сразу показываем ввод кода
+        _showCodeFor('sms', '');
       } else {
-        setState(() => _info = 'Неизвестный шаг: $resp');
+        setState(() => _info = 'Неизвестный ответ: $resp');
       }
     } catch (e) {
       final s = e.toString();

@@ -20,17 +20,42 @@ class VkLkmpAuth {
   final http.Client _http;
   VkLkmpAuth(this._http);
 
-  // device_id = android_id + ":" + hash(Model+ID...), кешируется как в A.b.y()
+  // --- LKMP точь-в-точь: A.b.y() = android_id + ":" + E(Build.MODEL+Build.ID+...), где E — MD5 с багом без паддинга ---
+  String _lkmpMd5NoPad(String s) {
+    final digest = md5.convert(s.codeUnits).bytes;
+    // LKMP: for (byte b: digest) sb.append(Integer.toHexString(b & 255)) — без ведущего нуля!
+    return digest.map((b) => (b & 0xFF).toRadixString(16)).join();
+  }
+
   Future<String> _deviceId() async {
     final p = await SharedPreferences.getInstance();
     var cached = p.getString('vk_lkmp_device_id');
     if (cached != null && cached.isNotEmpty) return cached;
-    // генерим как в LKMP: android_id (random) + ":" + hash
+    // android_id как в LKMP — 16 hex, сохраняем стабильно
     final androidId = _randHex(16);
-    final hash = _md5('aura_${DateTime.now().millisecondsSinceEpoch}').substring(0, 8);
-    final id = '$androidId:$hash';
-    await p.setString('vk_lkmp_device_id', id);
-    return id;
+    // Build поля как в A.b.x() fallback: Google Nexus 5X + arm64-v8a
+    const model = 'Google Nexus 5X';
+    const id = 'TP1A.221105.002';
+    const manufacturer = 'Google';
+    const brand = 'google';
+    const type = 'user';
+    const arch = 'arm64-v8a';
+    final hash = _lkmpMd5NoPad(model + id + manufacturer + brand + type + arch);
+    final dev = '$androidId:$hash';
+    await p.setString('vk_lkmp_device_id', dev);
+    return dev;
+  }
+
+  // кеш anonymToken на 55 минут как у LKMP (чтобы не спамить и не ловить flood)
+  String? _cachedAnon;
+  int _anonTs = 0;
+  Future<String> _cachedAnonToken() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_cachedAnon != null && now - _anonTs < 55 * 60 * 1000) return _cachedAnon!;
+    final t = await getAnonymToken();
+    _cachedAnon = t;
+    _anonTs = now;
+    return t;
   }
 
   // gaid = UUID 8-4-4-4-12 hex как в N1/e.g()
@@ -89,8 +114,8 @@ class VkLkmpAuth {
 
   /// Шаг 2: как в m1/f.i() — auth.validateAccount с телефоном
   Future<Map<String, dynamic>> validateAccount({required String phone}) async {
-    final anon = await getAnonymToken();
-    return _post('$_host/method/auth.validateAccount', {
+    final anon = await _cachedAnonToken();
+    final res = await _post('$_host/method/auth.validateAccount', {
       'lang': 'ru',
       'device_id': await _deviceId(),
       'supported_ways': 'push,email,sms,callreset,password,reserve_code,codegen,official_messenger,max_code,passkey,libverify,max_messenger',
@@ -103,13 +128,14 @@ class VkLkmpAuth {
       'https': '1',
       'api_id': _apiId,
       'login': phone,
-      'access_token': anon, // дублируется как в LKMP
     }, 'auth_start_with_phone');
+    // пробрасываем как есть — обработку flood делаем в UI
+    return res;
   }
 
   /// Шаг 3: ecosystem.getVerificationMethods
   Future<Map<String, dynamic>> getVerificationMethods({required String sid, String extra = ''}) async {
-    final anon = await getAnonymToken();
+    final anon = await _cachedAnonToken();
     return _post('$_host/method/ecosystem.getVerificationMethods$extra', {
       'lang': 'ru',
       'device_id': await _deviceId(),
@@ -126,7 +152,7 @@ class VkLkmpAuth {
 
   /// Шаг 4: ecosystem.checkOtp
   Future<Map<String, dynamic>> checkOtp({required String code, required String sid}) async {
-    final anon = await getAnonymToken();
+    final anon = await _cachedAnonToken();
     return _post('$_host/method/ecosystem.checkOtp', {
       'code': code,
       'sid': sid,
