@@ -13,6 +13,7 @@ import '../state/ui_state.dart';
 import '../widgets/cover_art.dart';
 import '../widgets/seekbar.dart';
 import '../widgets/visualizer.dart';
+import 'vk_music/vk_music_page.dart';
 
 class AudioPage extends ConsumerStatefulWidget {
   const AudioPage({super.key});
@@ -21,10 +22,13 @@ class AudioPage extends ConsumerStatefulWidget {
   ConsumerState<AudioPage> createState() => _AudioPageState();
 }
 
+enum _AudioSource { offline, vk }
+
 class _AudioPageState extends ConsumerState<AudioPage> {
   String _query = '';
   String _sort = 'title';
   bool _showLibrary = false; // переключатель Плеер ↔ Библиотека когда трек играет
+  _AudioSource _source = _AudioSource.offline;
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +89,36 @@ class _AudioPageState extends ConsumerState<AudioPage> {
     return _audioLibrary(context, lib, player, theme);
   }
 
+  Widget _sourceToggle(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Center(
+        child: SegmentedButton<_AudioSource>(
+          segments: const [
+            ButtonSegment(value: _AudioSource.offline, label: Text('Офлайн'), icon: Icon(Icons.folder_rounded, size: 16)),
+            ButtonSegment(value: _AudioSource.vk, label: Text('VK Музыка'), icon: Icon(Icons.cloud_rounded, size: 16)),
+          ],
+          selected: {_source},
+          onSelectionChanged: (s) => setState(() => _source = s.first),
+          showSelectedIcon: false,
+          style: ButtonStyle(visualDensity: VisualDensity.compact),
+        ),
+      ),
+    );
+  }
+
   Widget _audioLibrary(BuildContext context, LibraryController lib, PlayerController player, ThemeData theme) {
+    // VK режим — показываем каталог VK поверх офлайн-библиотеки
+    if (_source == _AudioSource.vk) {
+      return Column(
+        children: [
+          _sourceToggle(theme),
+          const Divider(height: 1),
+          const Expanded(child: VkMusicPage()),
+        ],
+      );
+    }
+
     final accent = theme.colorScheme.primary;
     final list = _filtered(lib);
 
@@ -138,12 +171,17 @@ class _AudioPageState extends ConsumerState<AudioPage> {
       );
     }
 
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Панель управления — без дублирования кнопок
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sourceToggle(theme),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Панель управления — без дублирования кнопок
           Row(
             children: [
               Expanded(
@@ -214,6 +252,9 @@ class _AudioPageState extends ConsumerState<AudioPage> {
                       ));
                     },
                   ),
+          ),
+        ],
+            ),
           ),
         ],
       ),
