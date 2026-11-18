@@ -2,27 +2,25 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-/// Порт VkApi.kt — единая карта эндпоинтов.
-/// Никаких Android-зависимостей, только dart:convert / stdlib.
+/// Чистый VkApi — без мусора, только то что нужно для видео + музыки.
+/// Авторизация — как сайт vk.ru через vkvideoapp.
 class VkApi {
-  // ---------- Хосты ----------
   static const hostApi = 'https://api.vk.com';
   static const hostApiRu = 'https://api.vk.ru';
   static const hostCatalog = 'https://api.vkvideo.ru';
   static const hostLogin = 'https://login.vk.com/?act=get_anonym_token';
-  static const hostOAuthAuthorize = 'https://id.vk.com/authorize';
-  static const hostOAuthToken = 'https://id.vk.com/oauth2/auth';
-  static const hostOAuthLogout = 'https://id.vk.com/oauth2/logout';
   static const oauthRedirectUri = 'https://oauth.vk.ru/blank.html';
-  static const hostLiveApi = 'https://api.live.vkvideo.ru/v1';
+  static const hostOAuthAuthorize = 'https://oauth.vk.com/authorize';
 
-  // ---------- Версии ----------
   static const v = '5.199';
   static const vFallback = '5.131';
-  static const vLegacy = '5.282';
+
+  // vkvideoapp — VK Video (рабочий, не Кейт, не сайт)
+  static const oauthClientId = '52461373';
+  static const oauthScope = 'audio,video,offline,friends,groups,wall';
 
   static const List<String> clientIds = [
-    '52461373', // VK Video (web) — основной
+    '52461373', // vkvideoapp — primary
     '51703666',
     '51858169',
     '2274003',
@@ -30,40 +28,10 @@ class VkApi {
     '6287487',
   ];
 
-  // VK ID — реальный клиент m.vk.ru / id.vk.ru (ты вытащил 7934655 silent_token)
-  static const oauthClientId = '7934655'; // id.vk.ru auth silent_token
-  static const oauthClientIdCom = '2274003';
-  static const oauthScope = 'video,friends,groups,wall';
-  static const oauthScopeSite = 'audio,video,offline,friends,groups,wall';
-  static const hostOAuthAuthorizeSite = 'https://oauth.vk.com/authorize';
-  static const hostOAuthAuthorizeSiteRu = 'https://oauth.vk.ru/authorize';
-  static const hostVkId = 'https://id.vk.ru/auth';
-  // web client 7879029 оставляем для API вызовов queue.subscribe
-  static const webClientId = '7879029';
-  static const oauthFallbackIds = <String>['7879029', '6287487'];
-  static const oauthFallbackScopes = {
-    '7934655': 'audio,video,offline,friends,groups,wall',
-    '7879029': 'audio,video,offline,friends,groups,wall',
-    '6287487': 'audio,video,offline,friends,groups,wall',
-  };
-
-  // ---------- Методы ----------
+  // Методы
   static const _videoSearch = 'video.search';
   static const _catalogVideoSearchWeb2 = 'catalog.getVideoSearchWeb2';
   static const _videoGet = 'video.get';
-  static const _groupsGetById = 'groups.getById';
-  static const _resolveScreenName = 'utils.resolveScreenName';
-  static const _faveGet = 'fave.get';
-  static const _likesAdd = 'likes.add';
-  static const _getRelay = 'get_relay_access_token';
-
-  // Коды ошибок
-  static const errAuthFailed = 5;
-  static const errRate = 6;
-  static const errFlood = 9;
-  static const errAccessDenied = 15;
-  static const errValidation = 17;
-  static const errCaptcha = 14;
 
   static String _urlEncode(String s) => Uri.encodeComponent(s);
 
@@ -75,200 +43,48 @@ class VkApi {
     Map<String, String> params = const {},
   }) {
     final sb = StringBuffer('$host/method/$name?v=$version');
-    if (token != null && token.isNotEmpty) {
-      sb.write('&access_token=${_urlEncode(token)}');
-    }
-    for (final e in params.entries) {
-      sb.write('&${e.key}=${_urlEncode(e.value)}');
-    }
+    if (token != null && token.isNotEmpty) sb.write('&access_token=${_urlEncode(token)}');
+    for (final e in params.entries) sb.write('&${e.key}=${_urlEncode(e.value)}');
     return sb.toString();
   }
 
-  static String videoSearch({
-    required String token,
-    required String query,
-    int count = 30,
-    int offset = 0,
-    int? sort,
-    int? hd,
-    int? longer,
-    int? shorter,
-  }) {
-    return call(
-      host: hostApi,
-      name: _videoSearch,
-      token: token,
-      params: {
-        'q': query,
-        'count': count.toString(),
-        'offset': offset.toString(),
-        'extended': '1',
-        if (sort != null) 'sort': sort.toString(),
-        if (hd != null) 'hd': hd.toString(),
-        if (longer != null) 'longer': longer.toString(),
-        if (shorter != null) 'shorter': shorter.toString(),
-      },
-    );
-  }
+  static String videoSearch({required String token, required String query, int count = 30, int offset = 0}) =>
+      call(host: hostApi, name: _videoSearch, token: token, params: {'q': query, 'count': '$count', 'offset': '$offset', 'extended': '1'});
 
-  static String videoGet({
-    required String token,
-    int? ownerId,
-    String? videos,
-    int? albumId,
-    int count = 20,
-    int offset = 0,
-    bool extended = true,
-    String? fields,
-  }) {
-    return call(
+  static String videoGet({required String token, int? ownerId, String? videos, int count = 20, int offset = 0}) => call(
       host: hostApi,
       name: _videoGet,
       token: token,
-      params: {
-        if (ownerId != null) 'owner_id': ownerId.toString(),
-        if (videos != null) 'videos': videos,
-        if (albumId != null) 'album_id': albumId.toString(),
-        'count': count.toString(),
-        'offset': offset.toString(),
-        if (extended) 'extended': '1',
-        if (fields != null) 'fields': fields,
-      },
-    );
-  }
+      params: {if (ownerId != null) 'owner_id': '$ownerId', if (videos != null) 'videos': videos, 'count': '$count', 'offset': '$offset', 'extended': '1'});
 
-  static String catalogVideoSearchWeb2({
-    required String token,
-    required String clientId,
-    required String query,
-    int count = 30,
-    String? contentType,
-    String? nextFrom,
-  }) {
-    return call(
-      host: hostCatalog,
-      name: _catalogVideoSearchWeb2,
-      token: token,
-      params: {
-        'client_id': clientId,
-        'count': count.toString(),
-        'q': query,
-        if (contentType != null) 'content_type': contentType,
-        if (nextFrom != null) 'next_from': nextFrom,
-      },
-    );
-  }
+  static String catalogVideoSearchWeb2({required String token, required String clientId, required String query, int count = 30}) =>
+      call(host: hostCatalog, name: _catalogVideoSearchWeb2, token: token, params: {'client_id': clientId, 'count': '$count', 'q': query});
 
-  // ---------- OAuth VK ID (L1) ----------
-  static Map<String, String> oauthExchangeBody({
-    required String code,
-    required String codeVerifier,
-    required String state,
-    required String deviceId,
-    String clientId = oauthClientId,
-  }) {
-    return {
-      'grant_type': 'authorization_code',
-      'code': code,
-      'code_verifier': codeVerifier,
-      'state': state,
-      'device_id': deviceId,
-      'redirect_uri': oauthRedirectUri,
-      'client_id': clientId,
-    };
-  }
-
-  static Map<String, String> oauthRefreshBody({
-    required String refreshToken,
-    required String deviceId,
-    required String state,
-    String clientId = oauthClientId,
-  }) {
-    return {
-      'grant_type': 'refresh_token',
-      'refresh_token': refreshToken,
-      'client_id': clientId,
-      'device_id': deviceId,
-      'state': state,
-    };
-  }
-
-  static String oauthAuthorizeUrl({
-    required String codeChallenge,
-    required String state,
-    int langId = 0,
-    String scheme = 'space_gray',
-    String prompt = 'login',
-    String clientId = oauthClientId,
-  }) {
-    // VK ID 7934655 — silent_token как ты вытащил на m.vk.ru (isRedesigned, uuid, v=1.3.0)
-    if (clientId == '7934655') {
-      final uuid = 'aura-${DateTime.now().millisecondsSinceEpoch}';
-      const action = 'eyJuYW1lIjoibm9fcGFzc3dvcmRfZmxvdyIsImlucHV0X3R5cGUiOiJwaG9uZSIsInBhcmFtcyI6eyJ0eXBlIjoic2lnbl9pbiIsImNzcmZfaGFzaCI6ImMyOWI5ZGJmZmM5MTJkYTUyOCJ9fQ==';
-      final params = {
-        'isRedesigned': '1',
-        'action': action,
-        'is_redesigned': '1',
-        'initial_stats_info': 'eyJzb3VyY2UiOiJtYWluIiwic2NyZWVuIjoic3RhcnQifQ==',
-        'uuid': uuid,
-        'response_type': 'silent_token',
-        'v': '1.3.0',
-        'sdk_type': 'vkid',
-        'app_id': clientId,
-        'redirect_uri': 'https://m.vk.ru/login',
-      };
-      final qs = params.entries.map((e) => '${e.key}=${_urlEncode(e.value)}').join('&');
-      return '$hostVkId?$qs';
-    }
-    final scope = oauthFallbackScopes[clientId] ?? oauthScopeSite;
-    final host = hostOAuthAuthorizeSite;
+  /// Сайт-авторизация — vkvideoapp через куки сайта
+  static String oauthAuthorizeUrl({String? state}) {
+    final s = state ?? DateTime.now().millisecondsSinceEpoch.toString();
     final params = {
-      'client_id': clientId,
-      'scope': scope,
+      'client_id': oauthClientId,
+      'scope': oauthScope,
       'redirect_uri': oauthRedirectUri,
       'display': 'mobile',
       'response_type': 'token',
       'v': vFallback,
       'revoke': '1',
-      'state': state,
+      'state': s,
     };
-    final qs = params.entries.map((e) => '${e.key}=${_urlEncode(e.value)}').join('&');
-    return '$host?$qs';
+    return '$hostOAuthAuthorize?${params.entries.map((e) => '${e.key}=${_urlEncode(e.value)}').join('&')}';
   }
 
-  static String oauthAuthorizeUrlRu({
-    required String state,
-    String clientId = oauthClientId,
-  }) {
-    final scope = oauthFallbackScopes[clientId] ?? oauthScopeSite;
-    final params = {
-      'client_id': clientId,
-      'scope': scope,
-      'redirect_uri': 'https://oauth.vk.ru/blank.html',
-      'display': 'mobile',
-      'response_type': 'token',
-      'v': vFallback,
-      'revoke': '1',
-      'state': state,
-    };
-    final qs = params.entries.map((e) => '${e.key}=${_urlEncode(e.value)}').join('&');
-    return '$hostOAuthAuthorizeSiteRu?$qs';
-  }
+  static String videoKey(int ownerId, int videoId, String? accessKey) =>
+      accessKey == null || accessKey.isEmpty ? '${ownerId}_$videoId' : '${ownerId}_${videoId}_$accessKey';
 
-  static String videoKey(int ownerId, int videoId, String? accessKey) {
-    if (accessKey == null || accessKey.isEmpty) return '${ownerId}_$videoId';
-    return '${ownerId}_${videoId}_$accessKey';
-  }
+  static String videoPageUrl(int ownerId, int videoId, String? accessKey) =>
+      'https://vkvideo.ru/video${videoKey(ownerId, videoId, accessKey)}${accessKey == null || accessKey.isEmpty ? "" : "?access_key=$accessKey"}';
 
-  static String videoPageUrl(int ownerId, int videoId, String? accessKey) {
-    return 'https://vkvideo.ru/video${videoKey(ownerId, videoId, accessKey)}'
-        '${accessKey == null || accessKey.isEmpty ? "" : "?access_key=$accessKey"}';
-  }
-
-  // ---------- Анонимный токен L0 (без логина) ----------
+  // Аноним L0
   static String? _cachedAnon;
   static int _anonTs = 0;
-
   static Future<String> getAnonymToken({http.Client? client}) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     if (_cachedAnon != null && now - _anonTs < 3 * 3600 * 1000) return _cachedAnon!;
@@ -276,16 +92,7 @@ class VkApi {
     const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
     for (final cid in clientIds) {
       try {
-        final resp = await c.post(
-          Uri.parse(hostLogin),
-          headers: {
-            'User-Agent': ua,
-            'Origin': 'https://vkvideo.ru',
-            'Referer': 'https://vkvideo.ru/',
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          body: 'client_id=$cid',
-        ).timeout(const Duration(seconds: 8));
+        final resp = await c.post(Uri.parse(hostLogin), headers: {'User-Agent': ua, 'Origin': 'https://vkvideo.ru', 'Referer': 'https://vkvideo.ru/', 'Content-Type': 'application/x-www-form-urlencoded'}, body: 'client_id=$cid').timeout(const Duration(seconds: 8));
         if (resp.statusCode < 200 || resp.statusCode >= 300) continue;
         final j = jsonDecode(resp.body) as Map<String, dynamic>;
         final data = (j['data'] ?? j['response']) as Map<String, dynamic>?;
