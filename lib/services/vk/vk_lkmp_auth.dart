@@ -27,7 +27,7 @@ class VkLkmpAuth {
     if (cached != null && cached.isNotEmpty) return cached;
     // генерим как в LKMP: android_id (random) + ":" + hash
     final androidId = _randHex(16);
-    final hash = _md5('aura_${DateTime.now().millisecondsSinceEpoch}')[0..7];
+    final hash = _md5('aura_${DateTime.now().millisecondsSinceEpoch}').substring(0, 8);
     final id = '$androidId:$hash';
     await p.setString('vk_lkmp_device_id', id);
     return id;
