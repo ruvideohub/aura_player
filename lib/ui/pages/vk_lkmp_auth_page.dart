@@ -1,8 +1,9 @@
-import 'dart:async';
-import 'dart:typed_data';
+import 'dart:async' show Timer;
+import 'dart:convert' show jsonDecode;
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show MethodChannel;
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../../services/vk/vk_lkmp_auth.dart';
 
@@ -15,9 +16,8 @@ import '../../services/vk/vk_lkmp_auth.dart';
 ///  - «Отправить повторно» работает;
 ///  - выбор методов парсит response.methods[] (B_RunnableC0023l0.java:127);
 ///  - капча (error 14 / need_captcha) показывается и вводится, а не «блокирует»;
-///    картинка грузится с хедерами клиента через http (Image.memory, не Image.network),
-///    при пустой картинке/ошибке загрузки — смарт-капча VK ID (redirect_uri) в WebView
-///    с авто-перехватом и авто-ретраем после прохождения;
+///    картинка грузится с хедерами клиента, при пустой картинке/ошибке загрузки —
+///    смарт-капча VK ID (redirect_uri) в WebView с авто-ретраем после прохождения;
 ///  - checkOtp передаёт verification_method; при access_token в ответе сразу пост-логин;
 ///  - need_validation из oauth/token автоматически отправляет OTP нужным каналом.
 class VkLkmpAuthPage extends StatefulWidget {
@@ -48,9 +48,8 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
   String _smartToken = '';
   // Какой шаг повторить после прохождения капчи.
   VoidCallback? _retryAfterCaptcha;
-  // Кеш для картинки капчи — сбрасываем при каждой новой капче.
-  String _lastCaptchaImg = '';
-  Future<Uint8List?>? _captchaImageFuture;
+  // Хедеры для загрузки captcha_img (кеш, чтобы Image не перезапрашивался).
+  Future<Map<String, String>>? _captchaHeadersFuture;
 
   @override
   void initState() {
@@ -74,12 +73,13 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
     _captcha = null;
     _captchaCtrl.clear();
     _smartToken = '';
-    _lastCaptchaImg = '';
-    _captchaImageFuture = null;
   }
 
   /// Ключ капчи: смарт-капча (success_token) приоритетнее кода с картинки.
   String get _captchaKey => _smartToken.isNotEmpty ? _smartToken : _captchaCtrl.text.trim();
+
+  /// Одноразовый авто-повтор без captcha-параметров после непринятого токена.
+  bool _plainRetryPending = false;
 
   String _short(Object o) {
     final s = o.toString();
@@ -91,11 +91,14 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
       if (e.kind == 'captcha' && e.captcha != null) {
         _captcha = e.captcha;
         _smartToken = ''; // новая капча — прежний success_token больше не действует
-        _lastCaptchaImg = '';
-        _captchaImageFuture = null;
-        _info = (e.captcha!.img.isNotEmpty)
-            ? 'Введите код с картинки'
-            : 'VK требует проверку «Я не робот» — нажмите кнопку ниже';
+        _info = 'VK требует проверку. Для этого флоу картинка капчи не содержит '
+            'кода (заглушка «не поддерживается») — пройдите проверку VK ID '
+            'кнопкой ниже: она заменяет ввод кода.';
+        if (_plainRetryPending) {
+          // Токен не принят — автоматический чистый повтор (привязка сессии).
+          _plainRetryPending = false;
+          Future.microtask(() => _retryAfterCaptcha?.call());
+        }
       } else if (e.kind == 'flood') {
         _info = 'Слишком много попыток. Подождите 2–3 минуты и попробуйте снова.';
       } else {
@@ -221,7 +224,11 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
     setState(() => _loading = true);
     _retryAfterCaptcha = () => _chooseMethod(name, info);
     try {
-      final otp = await _auth.sendOtp(channel: name);
+      final otp = await _auth.sendOtp(
+        channel: name,
+        captcha: _captcha,
+        captchaKey: _captchaKey,
+      );
       final r = otp['response'];
       final otpInfo = (r is Map && r['info'] != null && '${r['info']}'.isNotEmpty)
           ? '${r['info']}'
@@ -320,24 +327,6 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
     }
   }
 
-  // ----------------------------------------------------------------- капча
-
-  Future<Uint8List?> _fetchCaptchaImage(String url) async {
-    try {
-      final headers = await _auth.captchaImageHeaders();
-      final r = await _http.get(Uri.parse(url), headers: headers).timeout(const Duration(seconds: 15));
-      if (r.statusCode >= 200 && r.statusCode < 300 && r.bodyBytes.lengthInBytes > 100) {
-        // Иногда VK отдаёт HTML-ошибку вместо PNG — отсекаем по content-type
-        final ct = (r.headers['content-type'] ?? '').toLowerCase();
-        if (ct.contains('text/html') || ct.contains('text/plain')) return null;
-        return r.bodyBytes;
-      }
-      return null;
-    } catch (_) {
-      return null;
-    }
-  }
-
   // --------------------------------------------------------------------- UI
 
   @override
@@ -362,41 +351,35 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
 
   Widget _captchaField() {
     final c = _captcha!;
-    // Сбрасываем кеш при смене картинки
-    if (c.img != _lastCaptchaImg) {
-      _lastCaptchaImg = c.img;
-      _captchaImageFuture = null;
-    }
     return Column(
       children: [
-        if (c.img.isNotEmpty) ...[
-          FutureBuilder<Uint8List?>(
-            future: _captchaImageFuture ??= _fetchCaptchaImage(c.img),
+        if (c.img.isNotEmpty)
+          FutureBuilder<Map<String, String>>(
+            future: _captchaHeadersFuture ??= _auth.captchaImageHeaders(),
             builder: (context, snap) {
               if (snap.connectionState != ConnectionState.done) {
                 return const SizedBox(
                     height: 60,
                     child: Center(child: CircularProgressIndicator(strokeWidth: 2)));
               }
-              final bytes = snap.data;
-              if (bytes != null && bytes.isNotEmpty) {
-                return ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.memory(bytes, height: 60, fit: BoxFit.contain),
-                );
-              }
-              // Fallback если картинка не загрузилась — сразу смарт-кнопка
-              return Column(
-                children: [
-                  const Text('Картинка капчи не загрузилась',
-                      style: TextStyle(color: Color(0xFFFFB74D), fontSize: 12),
-                      textAlign: TextAlign.center),
-                  const SizedBox(height: 6),
-                  _smartCaptchaButton(compact: true),
-                ],
+              return Image.network(
+                c.img,
+                height: 60,
+                fit: BoxFit.contain,
+                headers: snap.data,
+                errorBuilder: (_, __, ___) => _smartCaptchaButton(
+                    'Картинка капчи не загрузилась — пройдите проверку VK ID'),
               );
             },
-          ),
+          )
+        else ...[
+          const Text('VK просит подтвердить, что вы не робот',
+              style: TextStyle(color: Color(0xFFC8C8C8), fontSize: 14),
+              textAlign: TextAlign.center),
+          const SizedBox(height: 8),
+          _smartCaptchaButton(''),
+        ],
+        if (c.img.isNotEmpty) ...[
           const SizedBox(height: 8),
           TextField(
             controller: _captchaCtrl,
@@ -409,52 +392,57 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
             ),
-            keyboardType: TextInputType.text,
+            keyboardType: TextInputType.number,
           ),
           const SizedBox(height: 8),
           const Text(
-              'Не видно код? Пройдите проверку VK ID — она заменяет ввод.',
+              'Если на картинке текст «Картинка не поддерживается» — кода здесь нет. '
+              'Пройдите проверку VK ID: она заменяет ввод кода.',
               style: TextStyle(color: Color(0xFF8A8A8A), fontSize: 12),
               textAlign: TextAlign.center),
-          const SizedBox(height: 4),
-          _smartCaptchaButton(),
-        ] else ...[
-          const Text('VK просит подтвердить, что вы не робот',
-              style: TextStyle(color: Color(0xFFC8C8C8), fontSize: 14),
-              textAlign: TextAlign.center),
-          const SizedBox(height: 10),
-          _smartCaptchaButton(),
+          _smartCaptchaButton(''),
         ],
       ],
     );
   }
 
-  Widget _smartCaptchaButton({bool compact = false}) {
-    return SizedBox(
-      width: double.infinity,
-      height: 44,
-      child: OutlinedButton(
-        style: OutlinedButton.styleFrom(
-          side: const BorderSide(color: Color(0xFF0077FF)),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+  Widget _smartCaptchaButton(String note) {
+    return Column(
+      children: [
+        if (note.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(note,
+              style: const TextStyle(color: Color(0xFFFFB74D), fontSize: 12),
+              textAlign: TextAlign.center),
+        ],
+        const SizedBox(height: 4),
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0xFF0077FF)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: _loading ? null : _openSmartCaptcha,
+            child: const Text('Пройти проверку VK ID («Я не робот»)',
+                style: TextStyle(color: Color(0xFF0077FF), fontSize: 14)),
+          ),
         ),
-        onPressed: _loading ? null : _openSmartCaptcha,
-        child: Text(
-            compact ? 'Пройти проверку VK ID' : 'Пройти проверку VK ID («Я не робот»)',
-            style: const TextStyle(color: Color(0xFF0077FF), fontSize: 14)),
-      ),
+      ],
     );
   }
 
-  /// Смарт-капча VK ID: открываем redirect_uri в WebView. Страница по завершении
-  /// шлёт postMessage (vk-sak-sdk) с success_token/captcha_key — перехватываем
-  /// и автоматически повторяем шаг. Если токен не пришёл, всё равно делаем
-  /// ретрай — VK часто принимает проверку по кукам WebView.
+  /// Смарт-капча VK ID: открываем redirect_uri в WebView. Страница после
+  /// успешной проверки вызывает AndroidBridge.VKCaptchaGetResult('{"token":…}')
+  /// (мост настоящего VK SDK — инжектим свой) и/или редиректит на
+  /// redirect+"?success_token=…" / oauth.vk.com/blank.html?success=1.
+  /// Перехватываем токен и АВТОМАТИЧЕСКИ повторяем шаг, на котором пришла капча.
   Future<void> _openSmartCaptcha() async {
     final c = _captcha;
     if (c == null || c.redirectUri.isEmpty) {
       setState(() {
-        _info = 'Смарт-капча недоступна (нет ссылки). Попробуйте ещё раз — VK пришлёт новую капчу.';
+        _info = 'Смарт-капча недоступна (нет ссылки). Повторите запрос — VK пришлёт капчу заново.';
       });
       return;
     }
@@ -463,27 +451,29 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
       MaterialPageRoute(builder: (_) => VkSmartCaptchaPage(url: c.redirectUri)),
     );
     if (!mounted) return;
-    // Синхронизируем куки WebView → Dart (иначе VK снова шлёт капчу)
-    try {
-      const ch = MethodChannel('aura.player/native');
-      final raw = await ch.invokeMethod<String>('getWebViewCookies', {'url': 'https://vk.ru/'});
-      if (raw != null && raw.isNotEmpty) _auth.adoptCookies(raw);
-      final raw2 = await ch.invokeMethod<String>('getWebViewCookies', {'url': 'https://id.vk.ru/'});
-      if (raw2 != null && raw2.isNotEmpty) _auth.adoptCookies(raw2);
-    } catch (_) {}
-    if (token != null && token.isNotEmpty) {
+    if (token != null && token.isNotEmpty && token != 'SUCCESS' && token != 'EXTERNAL') {
       setState(() {
         _smartToken = token;
+        // Если VK не примет токен и вернёт капчу снова — один чистый повтор
+        // без captcha-параметров (привязка решённой сессии на сервере).
+        _plainRetryPending = true;
         _info = 'Проверка пройдена — повторяем запрос…';
       });
-    } else {
-      // Токен не перехватили, но VK мог засчитать проверку по кукам — пробуем без него
+      _retryAfterCaptcha?.call();
+    } else if (token == 'SUCCESS' || token == 'EXTERNAL') {
+      // Проверка пройдена, но success_token не дошёл (страница ушла на
+      // blank.html?success=1 или проверка была во внешнем браузере).
+      // Сессия капчи решена на сервере — пробуем ЧИСТЫЙ повтор без captcha_key.
       setState(() {
-        _info = 'Пробуем продолжить…';
+        _smartToken = '';
+        _info = 'Проверка пройдена — повторяем запрос…';
+      });
+      _retryAfterCaptcha?.call();
+    } else {
+      setState(() {
+        _info = 'Если проверка пройдена — просто нажмите «Далее»/«Подтвердить» ещё раз';
       });
     }
-    // Всегда ретрай после возврата из WebView
-    _retryAfterCaptcha?.call();
   }
 
   Widget _button({
@@ -635,8 +625,12 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
 }
 
 /// WebView со смарт-капчей VK ID (redirect_uri из ошибки 14 / need_captcha).
-/// Перехватывает postMessage vk-sak-sdk и изменения URL, автозакрывается
-/// при получении success_token/captcha_key.
+/// Контракт страницы not_robot_captcha: детектит window.AndroidBridge
+/// (мост настоящего VK SDK) — при его наличии снимается 8-секундный дедлайн
+/// PoW, а по успеху вызывается AndroidBridge.VKCaptchaGetResult('{"token":…}');
+/// параллельно страница может редиректить на redirect+"?success_token=…"
+/// или oauth.vk.com/blank.html?success=1. Все три канала перехватываются,
+/// токен возвращается в форму авторизации для авто-повтора запроса.
 class VkSmartCaptchaPage extends StatefulWidget {
   final String url;
   const VkSmartCaptchaPage({super.key, required this.url});
@@ -646,53 +640,42 @@ class VkSmartCaptchaPage extends StatefulWidget {
 
 class _VkSmartCaptchaPageState extends State<VkSmartCaptchaPage> {
   String _captured = '';
-  String _status = 'Пройдите проверку, затем нажмите «Готово»';
-  bool _autoPopped = false;
+  String _status = 'Пройдите проверку «Я не робот» — дальше всё произойдёт само';
+  Timer? _poll;
+  bool _popped = false;
+  bool _external = false; // ПК (нет webview) — открываем системный браузер
 
-  static const _hookJs = r'''
+  /// Мост настоящего VK SDK: страница not_robot_captcha в начале JS-бандла
+  /// запоминает window.AndroidBridge (isMobileSDK() → true) и по успеху вызывает
+  /// AndroidBridge.VKCaptchaGetResult('{"token":"…"}'). Наличие моста снимает
+  /// 8-секундный дедлайн проверки (PoW) и доставляет success_token напрямую.
+  /// Инжектится в onPageStarted — до выполнения внешних скриптов страницы.
+  static const _bridgeJs = '''
+(function(){
+  if (window.__auraBridge) return; window.__auraBridge = 1;
+  var push = function(name, data){
+    var s = name + ':' + (typeof data === 'string' ? data : JSON.stringify(data));
+    try { window.__auraCaptchaResult = s; } catch(e) {}
+    try { AuraCaptcha.postMessage(s); } catch(e) {}
+  };
+  var b = {};
+  var names = ['VKCaptchaGetResult','VKCaptchaCloseCaptcha','VKCaptchaUserClose',
+               'VKCaptchaListenSensorsStart','VKCaptchaListenSensorsChanged',
+               'VKCaptchaListenSensorsWebChanged','VKCaptchaListenSensorsStop'];
+  for (var i = 0; i < names.length; i++) (function(n){ b[n] = function(d){ push(n, d); }; })(names[i]);
+  try { window.AndroidBridge = b; } catch(e) {}
+})();
+''';
+
+  /// Страховка: заворачиваем postMessage (страница шлёт результат родителю,
+  /// если считает себя встроенной) и слушаем входящие message-события.
+  static const _hookJs = '''
 (function(){
   if (window.__auraHook) return; window.__auraHook = 1;
-  var send = function(d){
-    try {
-      var s = (typeof d === 'string') ? d : JSON.stringify(d);
-      if (s && s.length > 4) AuraCaptcha.postMessage(s);
-    } catch(e){}
-  };
-  var wrap = function(w){
-    if (!w || w.__auraWrapped) return;
-    try {
-      w.__auraWrapped = 1;
-      var orig = w.postMessage;
-      if (orig) {
-        w.postMessage = function(m,t){
-          try { send(m); } catch(e){}
-          try { return orig.call(this, m, t||'*'); } catch(e){ return; }
-        };
-      }
-    } catch(e){}
-  };
-  try { wrap(window); wrap(window.parent); wrap(window.top); } catch(e){}
-  window.addEventListener('message', function(e){ try { send(e.data); } catch(e2){} }, true);
-  // Постоянный опрос DOM на предмет токена — ловит случаи, когда postMessage ушёл до установки хука
-  setInterval(function(){
-    try {
-      var html = document.documentElement ? document.documentElement.innerHTML : '';
-      var m = html.match(/["']success_token["']\s*:\s*["']([^"']+)["']/);
-      if (m && m[1] && m[1].length > 10) send(JSON.stringify({success_token: m[1]}));
-      var m2 = html.match(/["']captcha_key["']\s*:\s*["']([^"']+)["']/);
-      if (m2 && m2[1] && m2[1].length > 4) send(JSON.stringify({captcha_key: m2[1]}));
-      var m3 = html.match(/["']captcha_sid["']\s*:\s*["']([^"']+)["']/);
-      // vk-sid иногда отдельно — тоже шлём
-      var u = window.location.href || '';
-      if (u.indexOf('success_token=') !== -1) send(u);
-      if (u.indexOf('captcha_key=') !== -1) send(u);
-      // success в теле страницы
-      if (html.indexOf('success') !== -1 && html.indexOf('captcha') !== -1) {
-        var m4 = u.match(/[?&]success_token=([^&]+)/);
-        if (m4) send(JSON.stringify({success_token: decodeURIComponent(m4[1])}));
-      }
-    } catch(e){}
-  }, 700);
+  var send = function(d){ try { AuraCaptcha.postMessage(typeof d === 'string' ? d : JSON.stringify(d)); } catch(e){} };
+  var wrap = function(w){ if(!w || w.__auraWrapped) return; try { w.__auraWrapped = 1; var o = w.postMessage.bind(w); w.postMessage = function(m,t){ send(m); return o(m,t); }; } catch(e){} };
+  try { wrap(window.parent); wrap(window); } catch(e){}
+  try { window.addEventListener('message', function(e){ send(e.data); }); } catch(e){}
 })();
 ''';
 
@@ -700,77 +683,139 @@ class _VkSmartCaptchaPageState extends State<VkSmartCaptchaPage> {
     ..setJavaScriptMode(JavaScriptMode.unrestricted)
     ..addJavaScriptChannel('AuraCaptcha', onMessageReceived: _onMessage)
     ..setNavigationDelegate(NavigationDelegate(
-      onPageStarted: (_) => _hookMessages(),
-      onPageFinished: (_) => _hookMessages(),
-      onUrlChange: (change) {
-        final t = _extractFromUrl(change.url ?? '');
-        if (t != null && t.isNotEmpty && t != _captured) _handleCaptured(t);
+      onPageStarted: (url) {
+        // Ранняя инжекция моста: внешние бандлы страницы ещё не исполнились.
+        try {
+          _controller.runJavaScript(_bridgeJs);
+        } catch (_) {}
       },
+      onPageFinished: (_) => _afterLoad(),
       onNavigationRequest: (r) {
+        // Редирект после успеха: redirect_uri + "?success_token=…" либо
+        // https://oauth.vk.com/blank.html?success=1. Ничего не блокируем!
         final t = _extractFromUrl(r.url);
-        if (t != null && t.isNotEmpty && t != _captured) _handleCaptured(t);
+        if (t != null && t.isNotEmpty && t != _captured) {
+          if (t == 'SUCCESS') {
+            _popWith('', 'Проверка пройдена — возвращаемся…');
+          } else {
+            _popWith(t, 'Проверка пройдена — возвращаемся…');
+          }
+        }
         return NavigationDecision.navigate;
       },
-    ))
-    ..loadRequest(Uri.parse(widget.url));
+    ));
 
-  void _hookMessages() {
+  @override
+  void initState() {
+    super.initState();
+    final mobile = Platform.isAndroid || Platform.isIOS;
+    if (!mobile) {
+      _external = true;
+      return;
+    }
     try {
+      _controller.loadRequest(Uri.parse(widget.url));
+    } catch (_) {
+      _external = true;
+    }
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  void _afterLoad() {
+    try {
+      // onPageStarted мог не успеть до бандла — дублируем (защита __auraBridge).
+      _controller.runJavaScript(_bridgeJs);
       _controller.runJavaScript(_hookJs);
+    } catch (_) {}
+    _poll ??= Timer.periodic(const Duration(milliseconds: 700), (_) => _pollTick());
+  }
+
+  /// Опрос: __auraCaptchaResult (мост/postMessage) + текущий URL (редирект
+  /// с success_token / blank.html?success=1 виден даже без навигации).
+  Future<void> _pollTick() async {
+    if (_popped) return;
+    try {
+      final res = await _controller.runJavaScriptReturningResult(
+          "(window.__auraCaptchaResult||'')+'|'+String(window.location.href)");
+      final s = _cleanJs(res);
+      final i = s.indexOf('|');
+      final payload = i >= 0 ? s.substring(0, i) : s;
+      final href = i >= 0 ? s.substring(i + 1) : '';
+      final fromUrl = _extractFromUrl(href);
+      if (fromUrl == 'SUCCESS') {
+        _popWith('', 'Проверка пройдена — возвращаемся…');
+        return;
+      }
+      final t = _tokenFromPayload(payload) ?? fromUrl;
+      if (t != null && t.isNotEmpty && t != _captured) {
+        _popWith(t, 'Проверка пройдена — возвращаемся…');
+      }
     } catch (_) {}
   }
 
-  void _onMessage(JavaScriptMessage m) {
-    final t = _extractFromText(m.message);
-    if (t == null || t.isEmpty || t == _captured) return;
-    _handleCaptured(t);
+  String _cleanJs(Object res) {
+    var s = '$res';
+    if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+      try {
+        s = '${jsonDecode(s)}';
+      } catch (_) {}
+    }
+    return s.replaceAll(r'\"', '"');
   }
 
-  void _handleCaptured(String token) {
-    if (_autoPopped) return;
-    _captured = token;
-    setState(() => _status = 'Проверка пройдена — возвращаемся…');
-    _autoPopped = true;
-    Future.delayed(const Duration(milliseconds: 600), () {
-      if (mounted) Navigator.pop(context, _captured);
-    });
-  }
-
-  String? _extractFromText(String s) {
-    // Прямой URL
-    if (s.contains('success_token=') || s.contains('captcha_key=')) {
-      final u = _extractFromUrl(s);
-      if (u != null) return u;
+  /// 'VKCaptchaGetResult:{"token":"…"}' или конверт
+  /// '{"message":{"handler":"VKCaptchaGetResult","params":{"token":"…"}}}' → токен.
+  String? _tokenFromPayload(String s) {
+    if (s.isEmpty) return null;
+    if (s.startsWith('VKCaptchaGetResult:') ||
+        s.contains('"handler":"VKCaptchaGetResult"') ||
+        s.contains('"handler": "VKCaptchaGetResult"')) {
+      final m = RegExp(r'"token"\s*:\s*"([^"]+)"').firstMatch(s);
+      if (m != null && m.group(1)!.isNotEmpty) return m.group(1);
     }
     for (final pat in [
       RegExp(r'"success_token"\s*:\s*"([^"]+)"'),
-      RegExp(r"'success_token'\s*:\s*'([^']+)'"),
       RegExp(r'"captcha_key"\s*:\s*"([^"]+)"'),
-      RegExp(r"'captcha_key'\s*:\s*'([^']+)'"),
-      RegExp(r'success_token=([^"&\s]+)'),
-      RegExp(r'captcha_key=([^"&\s]+)'),
     ]) {
       final m = pat.firstMatch(s);
       final v = m?.group(1);
-      if (v != null && v.isNotEmpty && v != 'success' && v.length > 4) return Uri.decodeComponent(v);
+      if (v != null && v.isNotEmpty && v != 'success') return v;
     }
     return null;
   }
 
+  void _onMessage(JavaScriptMessage m) {
+    if (_popped) return;
+    final t = _tokenFromPayload(m.message);
+    if (t == null || t.isEmpty || t == _captured) return;
+    _popWith(t, 'Проверка пройдена — возвращаемся…');
+  }
+
+  void _popWith(String token, String status) {
+    if (_popped || !mounted) return;
+    _popped = true;
+    _captured = token;
+    _poll?.cancel();
+    setState(() => _status = status);
+    Future.delayed(const Duration(milliseconds: 700), () {
+      if (mounted) Navigator.pop(context, token.isEmpty ? 'SUCCESS' : token);
+    });
+  }
+
   String? _extractFromUrl(String url) {
     try {
+      if (url.contains('blank.html') && url.contains('success=1')) return 'SUCCESS';
       final u = Uri.parse(url);
-      for (final k in const ['success_token', 'captcha_key', 'captcha_sid']) {
+      for (final k in const ['success_token', 'captcha_key']) {
         final q = u.queryParameters[k];
-        if (q != null && q.isNotEmpty && q != 'success' && q.length > 4) return Uri.decodeComponent(q);
+        if (q != null && q.isNotEmpty) return q;
         final f = u.fragment.isNotEmpty ? _frag(u.fragment, k) : null;
-        if (f != null && f.isNotEmpty && f.length > 4) return f;
-      }
-      // Иногда токен в path: /success/success_token/xxxxx
-      final path = u.path;
-      if (path.contains('success_token')) {
-        final m = RegExp(r'success_token[/=]([^/&?]+)').firstMatch(url);
-        if (m != null) return Uri.decodeComponent(m.group(1)!);
+        if (f != null && f.isNotEmpty) return f;
       }
     } catch (_) {}
     return null;
@@ -786,6 +831,43 @@ class _VkSmartCaptchaPageState extends State<VkSmartCaptchaPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_external) {
+      // Windows/Linux/macOS: webview_flutter не поддерживается (белый экран в
+      // прежних версиях) — открываем проверку в системном браузере. Сессия
+      // капчи решается на сервере VK, поэтому после прохождения достаточно
+      // чистого повтора запроса.
+      return Scaffold(
+        backgroundColor: const Color(0xFF131313),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF131313),
+          iconTheme: const IconThemeData(color: Colors.white),
+          title: const Text('Подтверждение VK ID', style: TextStyle(color: Colors.white)),
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Проверка «Я не робот»',
+                  style: TextStyle(color: Colors.white, fontSize: 18),
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 12),
+              const Text(
+                  'Нажмите «Открыть браузер», пройдите проверку VK ID, затем '
+                  'вернитесь в приложение и нажмите «Готово».',
+                  style: TextStyle(color: Color(0xFFC8C8C8), fontSize: 14),
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 20),
+              _extButton('Открыть браузер', const Color(0xFF0077FF), _launchExternal),
+              const SizedBox(height: 8),
+              _extButton('Готово — я прошёл проверку', const Color(0xFF2D2D2D),
+                  () => Navigator.pop(context, 'EXTERNAL')),
+            ],
+          ),
+        ),
+      );
+    }
     return Scaffold(
       backgroundColor: const Color(0xFF131313),
       appBar: AppBar(
@@ -812,5 +894,26 @@ class _VkSmartCaptchaPageState extends State<VkSmartCaptchaPage> {
         ],
       ),
     );
+  }
+
+  Widget _extButton(String label, Color color, VoidCallback onPressed) {
+    return SizedBox(
+      width: double.infinity,
+      height: 48,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+            backgroundColor: color, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+        onPressed: onPressed,
+        child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 15)),
+      ),
+    );
+  }
+
+  Future<void> _launchExternal() async {
+    try {
+      await launchUrl(Uri.parse(widget.url), mode: LaunchMode.externalApplication);
+    } catch (_) {
+      setState(() => _status = 'Не удалось открыть браузер');
+    }
   }
 }

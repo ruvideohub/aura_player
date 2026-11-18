@@ -226,19 +226,13 @@ class MainActivity : FlutterActivity() {
                     map["buildId"] = Build.ID ?: ""
                     map["type"] = Build.TYPE ?: ""
                     map["abi"] = if (Build.SUPPORTED_ABIS.isNotEmpty()) Build.SUPPORTED_ABIS[0] else ""
+                    // os.arch — именно System.getProperty("os.arch") (aarch64/x86_64),
+                    // как в A.b.y()/A.b.x() LKMP: SUPPORTED_ABIS[0] ("arm64-v8a") даёт
+                    // ДРУГОЙ device_id-хеш, и VK видит неизвестное устройство → капча.
+                    map["arch"] = try { System.getProperty("os.arch") ?: "" } catch (_: Throwable) { "" }
                     map["osRelease"] = Build.VERSION.RELEASE ?: ""
                     map["sdkInt"] = Build.VERSION.SDK_INT.toString()
                     result.success(map)
-                }
-                // WebView куки после смарт-капчи — Дарт их не видит, а VK без них
-                // снова шлёт капчу. Синхронизируем CookieManager → _cookies.
-                "getWebViewCookies" -> {
-                    val url = call.argument<String>("url") ?: "https://vk.ru/"
-                    try {
-                        val cm = android.webkit.CookieManager.getInstance()
-                        val c = try { cm.getCookie(url) ?: "" } catch (_: Throwable) { "" }
-                        result.success(c)
-                    } catch (_: Throwable) { result.success("") }
                 }
                 else -> result.notImplemented()
             }
