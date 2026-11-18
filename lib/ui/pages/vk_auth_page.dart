@@ -33,7 +33,7 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
   }
 
   Future<void> _loadWithClient(String clientId, SharedPreferences prefs, VkAccountManager mgr) async {
-    final start = await mgr.startLogin(prefs, clientIdOverride: clientId);
+    final start = await mgr.startLogin(prefs: prefs, clientIdOverride: clientId);
     final finalUrl = start.authorizeUrl;
     setState(() {
       _authorizeUrl = finalUrl;
@@ -141,7 +141,7 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
     }
     // 2) PKCE code flow для id.vk.com
     final mgr = ref.read(vkAccountManagerProvider);
-    final err = await mgr.handleRedirect(url, prefs);
+    final err = await mgr.handleRedirect(url, prefs: prefs);
     if (err == null) {
       if (!_successFired && mounted) {
         _successFired = true;
