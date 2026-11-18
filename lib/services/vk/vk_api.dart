@@ -30,21 +30,23 @@ class VkApi {
     '6287487',
   ];
 
-  // Сайт ВК — основной, с фоллбеками (по просьбе пользователя — с фоллбеками)
-  // id.vk.com не знает 6287487 (not found app id) — для него oauth.vk.com implicit
-  static const oauthClientId = '6287487'; // vk.com site, secret QbYic1K3lEV5kTGiqlq2
+  // Первичный — VK Video 51858169 (первая сборка с ним заходила, ты подтвердил)
+  // Фоллбеки — сайт 6287487 и остальные
+  static const oauthClientId = '51858169';
   static const oauthClientIdCom = '2274003';
   static const oauthScope = 'video,friends,groups,wall';
   static const oauthScopeSite = 'audio,video,offline,friends,groups,wall';
   static const hostOAuthAuthorizeSite = 'https://oauth.vk.com/authorize';
   // Фоллбеки если primary даёт Unknown method passed [3] / 405 без токена
-  static const oauthFallbackIds = ['6121396', '2274003', '51858169', '52461373', '51703666'];
+  static const oauthFallbackIds = ['6287487', '6121396', '2274003', '52461373', '51703666', '3140623'];
   static const oauthFallbackScopes = {
+    '6287487': 'audio,video,offline,friends,groups,wall',
     '6121396': 'audio,offline',
     '2274003': 'audio,offline,friends,wall,groups,video',
     '51858169': 'video,friends,groups,wall,audio,offline',
     '52461373': 'video,friends,groups,wall',
     '51703666': 'video,friends,groups,wall',
+    '3140623': 'video,friends,groups,wall',
   };
 
   // ---------- Методы ----------
