@@ -1,0 +1,26 @@
+<#root>
+  <LinearLayout ^W="^M" ^H="^W" orientation="vertical">
+    <syxme.lkmp.skinner.c.designText ^W="^M" ^H="^W" ^MB="16dp" ^G="17" text="Вход ВКонтакте" textColor="#FFFFFF" textSize="20sp">
+    </syxme.lkmp.skinner.c.designText>
+    <syxme.lkmp.skinner.c.designGroup ^W="^M" ^H="^M" ^LG="16" ^MB="16dp" app:background_color="#272727" app:radius="8">
+      <EditText ^W="^M" ^H="55dp" background="#00000000" ems="11" inputType="textEmailAddress" hint="Телефон или почта" imeOptions="actionGo" ^PS="16dp" singleLine="true" text="" textColor="#FFFFFF" textColorHint="#a1a3a7" textSize="18sp" app:binder="value">
+      </EditText>
+    </syxme.lkmp.skinner.c.designGroup>
+    <LinearLayout visibility="gone" ^W="^M" ^H="^W" ^MB="16dp" orientation="vertical" app:binder="captcha_block">
+      <syxme.lkmp.skinner.c.designGroup ^W="208dp" ^H="80dp" ^LG="1" ^MB="8dp" app:radius="4">
+        <ImageView ^W="^M" ^H="^M" app:binder="captcha_image">
+        </ImageView>
+      </syxme.lkmp.skinner.c.designGroup>
+      <syxme.lkmp.skinner.c.designGroup ^W="^M" ^H="55dp" ^LG="16" app:background_color="#272727" app:radius="8">
+        <EditText ^W="^M" ^H="55dp" background="#00000000" ems="11" hint="Код с картинки" imeOptions="actionGo" inputType="text" ^PS="16dp" singleLine="true" text="" textColor="#FFFFFF" textColorHint="#a1a3a7" textSize="18sp" app:binder="captcha_value">
+        </EditText>
+      </syxme.lkmp.skinner.c.designGroup>
+    </LinearLayout>
+    <syxme.lkmp.skinner.c.designText ^W="^M" ^H="^W" ^MB="17dp" ^G="17" text="Неверный логин или пароль" textAlignment="center" textSize="18sp" visibility="gone" app:binder="info" app:text_colors="#FF4141">
+    </syxme.lkmp.skinner.c.designText>
+    <syxme.lkmp.skinner.c.designGroup ^W="^M" ^H="55dp" ^LG="16" ^MB="16dp" app:background_color="#1E90FF" app:border="1px #6A605D5D" app:radius="8">
+      <syxme.lkmp.skinner.c.designText ^W="^M" ^H="^M" ^G="17" ^PS="8dp" ^PE="8dp" singleLine="true" text="Продолжить" textColor="#B8B8B8" textColorHint="#a1a3a7" textSize="20sp" app:binder="button" app:text_colors="#FFFFFF">
+      </syxme.lkmp.skinner.c.designText>
+    </syxme.lkmp.skinner.c.designGroup>
+  </LinearLayout>
+</#root>
