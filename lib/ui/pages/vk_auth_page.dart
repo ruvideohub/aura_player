@@ -42,10 +42,10 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
       _successFired = false;
     });
     _controller = WebViewController()
+      ..setUserAgent('Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36 VKAndroidApp/8.12')
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(NavigationDelegate(
         onNavigationRequest: (req) async {
-          // Любой URL с токеном — сразу ловим (даже с 405)
           if (req.url.contains('access_token=')) {
             final ok = await _handleRedirect(req.url, prefs);
             if (ok) return NavigationDecision.prevent;
@@ -62,26 +62,17 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
         },
         onUrlChange: (change) async {
           final u = change.url ?? '';
-          if (u.contains('access_token=')) {
-            await _handleRedirect(u, prefs);
-          }
+          if (u.contains('access_token=')) await _handleRedirect(u, prefs);
         },
         onPageFinished: (url) async {
-          // blank.html приходит даже с 405 — фрагмент уже в url
-          if (url.contains('blank.html') || url.contains('access_token=')) {
-            await _handleRedirect(url, prefs);
-          }
-          // Проверяем текст страницы на Unknown method
-          if (url.contains('oauth.vk.com') || url.contains('blank.html')) {
+          if (url.contains('blank.html') || url.contains('access_token=')) await _handleRedirect(url, prefs);
+          if (url.contains('oauth.vk.com') || url.contains('oauth.vk.ru') || url.contains('vk.ru') || url.contains('blank.html')) {
             _checkPageForError();
           }
         },
         onWebResourceError: (err) async {
-          // WebView может отдать 405 как ошибку — но url уже содержит токен
           final u = err.url ?? '';
-          if (u.contains('access_token=')) {
-            await _handleRedirect(u, prefs);
-          }
+          if (u.contains('access_token=')) await _handleRedirect(u, prefs);
         },
       ))
       ..loadRequest(Uri.parse(finalUrl));

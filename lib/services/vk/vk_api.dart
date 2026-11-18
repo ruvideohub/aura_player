@@ -30,23 +30,17 @@ class VkApi {
     '6287487',
   ];
 
-  // Первичный — VK Video 51858169 (первая сборка с ним заходила, ты подтвердил)
-  // Фоллбеки — сайт 6287487 и остальные
-  static const oauthClientId = '51858169';
+  // Авторизация как сайт — через vk.ru / oauth.vk.ru (не сторонний vk video)
+  static const oauthClientId = '6287487'; // vk.com site
   static const oauthClientIdCom = '2274003';
   static const oauthScope = 'video,friends,groups,wall';
   static const oauthScopeSite = 'audio,video,offline,friends,groups,wall';
   static const hostOAuthAuthorizeSite = 'https://oauth.vk.com/authorize';
-  // Фоллбеки если primary даёт Unknown method passed [3] / 405 без токена
-  static const oauthFallbackIds = ['6287487', '6121396', '2274003', '52461373', '51703666', '3140623'];
+  static const hostOAuthAuthorizeSiteRu = 'https://oauth.vk.ru/authorize';
+  // Для vk.ru пробуем оба хоста oauth.vk.com и oauth.vk.ru
+  static const oauthFallbackIds = <String>[]; // сайт — единственный, фоллбеки отключены по твоей просьбе
   static const oauthFallbackScopes = {
     '6287487': 'audio,video,offline,friends,groups,wall',
-    '6121396': 'audio,offline',
-    '2274003': 'audio,offline,friends,wall,groups,video',
-    '51858169': 'video,friends,groups,wall,audio,offline',
-    '52461373': 'video,friends,groups,wall',
-    '51703666': 'video,friends,groups,wall',
-    '3140623': 'video,friends,groups,wall',
   };
 
   // ---------- Методы ----------
@@ -203,38 +197,41 @@ class VkApi {
     String prompt = 'login',
     String clientId = oauthClientId,
   }) {
-    // Все oauth.vk.com implicit — работают даже когда id.vk.com даёт Unknown method [3]
-    // Для 6287487 и фоллбеков используем token flow
-    final siteIds = {'6287487', ...oauthFallbackIds};
-    if (siteIds.contains(clientId)) {
-      final scope = oauthFallbackScopes[clientId] ?? oauthScopeSite;
-      final params = {
-        'client_id': clientId,
-        'scope': scope,
-        'redirect_uri': oauthRedirectUri,
-        'display': 'mobile',
-        'response_type': 'token',
-        'v': vFallback,
-        'revoke': '1',
-        'state': state,
-      };
-      final qs = params.entries.map((e) => '${e.key}=${_urlEncode(e.value)}').join('&');
-      return '$hostOAuthAuthorizeSite?$qs';
-    }
+    // Сайт — как в браузере: oauth.vk.com / oauth.vk.ru implicit token (ты проверил 1a/1b — работают с 405)
+    final scope = oauthFallbackScopes[clientId] ?? oauthScopeSite;
+    final host = (clientId == '6287487') ? hostOAuthAuthorizeSite : hostOAuthAuthorizeSite;
+    // Для vk.ru пробуем oauth.vk.ru если oauth.vk.com даст Unknown method — переключим хост в фоллбеке
     final params = {
-      'state': state,
-      'response_type': 'code',
-      'code_challenge': codeChallenge,
-      'code_challenge_method': 'S256',
       'client_id': clientId,
-      'lang_id': langId.toString(),
-      'scheme': scheme,
-      'scope': oauthScope,
-      'prompt': prompt,
-      'redirect_uri': oauthRedirectUri,
+      'scope': scope,
+      'redirect_uri': oauthRedirectUri, // https://oauth.vk.ru/blank.html — как ты тестил в браузере
+      'display': 'mobile',
+      'response_type': 'token',
+      'v': vFallback,
+      'revoke': '1',
+      'state': state,
     };
     final qs = params.entries.map((e) => '${e.key}=${_urlEncode(e.value)}').join('&');
-    return '$hostOAuthAuthorize?$qs';
+    return '$host?$qs';
+  }
+
+  static String oauthAuthorizeUrlRu({
+    required String state,
+    String clientId = oauthClientId,
+  }) {
+    final scope = oauthFallbackScopes[clientId] ?? oauthScopeSite;
+    final params = {
+      'client_id': clientId,
+      'scope': scope,
+      'redirect_uri': 'https://oauth.vk.ru/blank.html',
+      'display': 'mobile',
+      'response_type': 'token',
+      'v': vFallback,
+      'revoke': '1',
+      'state': state,
+    };
+    final qs = params.entries.map((e) => '${e.key}=${_urlEncode(e.value)}').join('&');
+    return '$hostOAuthAuthorizeSiteRu?$qs';
   }
 
   static String videoKey(int ownerId, int videoId, String? accessKey) {
