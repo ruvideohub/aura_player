@@ -31,9 +31,12 @@ class VkApi {
   ];
 
   // Сайт ВК — единственный незабаненный для авторизации (по просьбе пользователя)
+  // id.vk.com не знает этот id (not found app id) — для 6287487 используем oauth.vk.com implicit flow
   static const oauthClientId = '6287487'; // vk.com site, secret QbYic1K3lEV5kTGiqlq2
   static const oauthClientIdCom = '2274003';
   static const oauthScope = 'video,friends,groups,wall';
+  static const oauthScopeSite = 'audio,video,offline,friends,groups,wall';
+  static const hostOAuthAuthorizeSite = 'https://oauth.vk.com/authorize';
 
   // ---------- Методы ----------
   static const _videoSearch = 'video.search';
@@ -189,6 +192,21 @@ class VkApi {
     String prompt = 'login',
     String clientId = oauthClientId,
   }) {
+    // 6287487 (сайт ВК) отсутствует на id.vk.com — ведём на oauth.vk.com implicit (token в фрагменте)
+    if (clientId == '6287487') {
+      final params = {
+        'client_id': clientId,
+        'scope': oauthScopeSite,
+        'redirect_uri': oauthRedirectUri,
+        'display': 'mobile',
+        'response_type': 'token',
+        'v': vFallback,
+        'revoke': '1',
+        'state': state,
+      };
+      final qs = params.entries.map((e) => '${e.key}=${_urlEncode(e.value)}').join('&');
+      return '$hostOAuthAuthorizeSite?$qs';
+    }
     final params = {
       'state': state,
       'response_type': 'code',
