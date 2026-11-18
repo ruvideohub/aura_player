@@ -30,13 +30,22 @@ class VkApi {
     '6287487',
   ];
 
-  // Сайт ВК — единственный незабаненный для авторизации (по просьбе пользователя)
-  // id.vk.com не знает этот id (not found app id) — для 6287487 используем oauth.vk.com implicit flow
+  // Сайт ВК — основной, с фоллбеками (по просьбе пользователя — с фоллбеками)
+  // id.vk.com не знает 6287487 (not found app id) — для него oauth.vk.com implicit
   static const oauthClientId = '6287487'; // vk.com site, secret QbYic1K3lEV5kTGiqlq2
   static const oauthClientIdCom = '2274003';
   static const oauthScope = 'video,friends,groups,wall';
   static const oauthScopeSite = 'audio,video,offline,friends,groups,wall';
   static const hostOAuthAuthorizeSite = 'https://oauth.vk.com/authorize';
+  // Фоллбеки если primary даёт Unknown method passed [3] / 405 без токена
+  static const oauthFallbackIds = ['6121396', '2274003', '51858169', '52461373', '51703666'];
+  static const oauthFallbackScopes = {
+    '6121396': 'audio,offline',
+    '2274003': 'audio,offline,friends,wall,groups,video',
+    '51858169': 'video,friends,groups,wall,audio,offline',
+    '52461373': 'video,friends,groups,wall',
+    '51703666': 'video,friends,groups,wall',
+  };
 
   // ---------- Методы ----------
   static const _videoSearch = 'video.search';
@@ -192,11 +201,14 @@ class VkApi {
     String prompt = 'login',
     String clientId = oauthClientId,
   }) {
-    // 6287487 (сайт ВК) отсутствует на id.vk.com — ведём на oauth.vk.com implicit (token в фрагменте)
-    if (clientId == '6287487') {
+    // Все oauth.vk.com implicit — работают даже когда id.vk.com даёт Unknown method [3]
+    // Для 6287487 и фоллбеков используем token flow
+    final siteIds = {'6287487', ...oauthFallbackIds};
+    if (siteIds.contains(clientId)) {
+      final scope = oauthFallbackScopes[clientId] ?? oauthScopeSite;
       final params = {
         'client_id': clientId,
-        'scope': oauthScopeSite,
+        'scope': scope,
         'redirect_uri': oauthRedirectUri,
         'display': 'mobile',
         'response_type': 'token',

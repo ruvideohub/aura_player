@@ -47,11 +47,12 @@ class VkAccountManager {
 
   String? currentToken() => _session?.accessToken.isNotEmpty == true ? _session!.accessToken : null;
 
-  /// Шаг 1: verifier/state + URL для WebView
+  /// Шаг 1: verifier/state + URL для WebView (с поддержкой фоллбек clientId)
   Future<({String authorizeUrl, String state})> startLogin(
     SharedPreferences prefs, {
     int langId = 0,
     String scheme = 'space_gray',
+    String? clientIdOverride,
   }) async {
     final verifier = VkAuthCore.generateCodeVerifier();
     final challenge = VkAuthCore.generateCodeChallenge(verifier);
@@ -63,6 +64,7 @@ class VkAccountManager {
       state: state,
       langId: langId,
       scheme: scheme,
+      clientId: clientIdOverride ?? VkApi.oauthClientId,
     );
     return (authorizeUrl: url, state: state);
   }

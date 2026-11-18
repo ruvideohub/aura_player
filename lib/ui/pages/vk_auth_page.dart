@@ -23,11 +23,94 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
   String? _error;
   late WebViewController _controller;
   String? _authorizeUrl;
+  int _fallbackIndex = -1; // -1 = primary 6287487, 0.. = oauthFallbackIds
+  String get _currentClientId => _fallbackIndex < 0 ? VkApi.oauthClientId : VkApi.oauthFallbackIds[_fallbackIndex];
 
   @override
   void initState() {
     super.initState();
     _init();
+  }
+
+  Future<void> _loadWithClient(String clientId, SharedPreferences prefs, VkAccountManager mgr) async {
+    // Генерим PKCE state/verifier под конкретный clientId
+    final url = VkApi.oauthAuthorizeUrl(
+      codeChallenge: '', // для oauth.vk.com implicit игнорируется
+      state: DateTime.now().millisecondsSinceEpoch.toString(),
+      clientId: clientId,
+    );
+    // Перезаписываем через startLogin чтобы сохранить state для проверки
+    final start = await mgr.startLogin(prefs, clientIdOverride: clientId);
+    final finalUrl = start.authorizeUrl;
+    setState(() {
+      _authorizeUrl = finalUrl;
+      _loading = false;
+      _error = null;
+    });
+    // Пересоздаём контроллер если уже был
+    try {
+      _controller = WebViewController()
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setNavigationDelegate(NavigationDelegate(
+          onNavigationRequest: (req) async {
+            if (req.url.contains('blank.html') || req.url.contains('oauth.vk.')) {
+              final parsed = await _handleRedirect(req.url, prefs);
+              if (parsed) return NavigationDecision.prevent;
+            }
+            // Ловим Unknown method passed [3] прямо на странице ошибки oauth
+            if (req.url.contains('error=') || req.url.contains('Unknown%20method')) {
+              _tryFallback('Ошибка OAuth: ${req.url}');
+              return NavigationDecision.prevent;
+            }
+            return NavigationDecision.navigate;
+          },
+          onPageFinished: (url) async {
+            if (url.contains('blank.html')) {
+              final ok = await _handleRedirect(url, prefs);
+              // blank с 405 без токена — считаем ошибкой и пробуем фоллбек
+              if (!ok && !url.contains('access_token=') && !url.contains('code=')) {
+                // проверим содержимое страницы на Unknown method
+                _checkPageForError();
+              }
+            }
+          },
+          onWebResourceError: (err) async {
+            // 405 на blank.html — норма, но без токена — пробуем фоллбек
+            if (err.url?.contains('blank.html') == true) {
+              await Future.delayed(const Duration(milliseconds: 500));
+              // если токен не выловили — фоллбек
+            }
+          },
+        ))
+        ..loadRequest(Uri.parse(finalUrl));
+      setState(() {});
+    } catch (_) {
+      // fallback если контроллер уже создан — просто грузим
+      _controller.loadRequest(Uri.parse(finalUrl));
+    }
+  }
+
+  Future<void> _tryFallback(String reason) async {
+    if (_fallbackIndex + 1 >= VkApi.oauthFallbackIds.length) {
+      setState(() => _error = '$reason — все фоллбеки перебраны');
+      return;
+    }
+    _fallbackIndex++;
+    final nextId = VkApi.oauthFallbackIds[_fallbackIndex];
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Пробую фоллбек $nextId: $reason')));
+    final prefs = await SharedPreferences.getInstance();
+    final mgr = ref.read(vkAccountManagerProvider);
+    await _loadWithClient(nextId, prefs, mgr);
+  }
+
+  Future<void> _checkPageForError() async {
+    try {
+      final html = await _controller.runJavaScriptReturningResult('document.documentElement.innerText') as String?;
+      final txt = html?.toString() ?? '';
+      if (txt.contains('Unknown method') || txt.contains('Unknown method passed') || txt.contains('[3]')) {
+        _tryFallback(txt.replaceAll('"', '').substring(0, 200));
+      }
+    } catch (_) {}
   }
 
   Future<void> _init() async {
@@ -38,28 +121,8 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
       widget.onSuccess();
       return;
     }
-    final start = await mgr.startLogin(prefs);
-    setState(() {
-      _authorizeUrl = start.authorizeUrl;
-      _loading = false;
-    });
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(NavigationDelegate(
-        onNavigationRequest: (req) async {
-          if (req.url.contains('blank.html') || req.url.contains('oauth.vk.')) {
-            final parsed = await _handleRedirect(req.url, prefs);
-            if (parsed) return NavigationDecision.prevent;
-          }
-          return NavigationDecision.navigate;
-        },
-        onPageFinished: (url) async {
-          if (url.contains('blank.html')) {
-            await _handleRedirect(url, prefs);
-          }
-        },
-      ))
-      ..loadRequest(Uri.parse(start.authorizeUrl));
+    _fallbackIndex = -1;
+    await _loadWithClient(VkApi.oauthClientId, prefs, mgr);
   }
 
   Future<bool> _handleRedirect(String url, SharedPreferences prefs) async {
