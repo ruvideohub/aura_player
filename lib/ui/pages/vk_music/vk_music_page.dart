@@ -10,7 +10,7 @@ import '../../../services/vk_music/vk_token_storage.dart';
 import '../../../services/library.dart';
 import '../../../models/models.dart';
 import '../../../state/player_controller.dart';
-import 'vk_id_auth_page.dart';
+import '../vk_auth_page.dart';
 
 final sharedPrefsProvider = Provider<SharedPreferences>((ref) => throw UnimplementedError('sharedPrefsProvider not overridden in main'));
 
@@ -148,10 +148,26 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
   Widget build(BuildContext context) {
     final prefs = ref.watch(sharedPrefsProvider);
     final storage = VkTokenStorage(prefs);
-    if (!storage.isAuthorized) {
-      return VkIdAuthPage(onSuccess: () => setState(() {}));
-    }
+    final isAuth = storage.isAuthorized;
     final theme = Theme.of(context);
+
+    // L1: Моя музыка требует PKCE-логина — показываем WebView на весь экран
+    if (!isAuth && _tab.index == 0) {
+      return Column(
+        children: [
+          TabBar(
+            controller: _tab,
+            onTap: (i) {
+              if (i == 0) _loadMy();
+              if (i == 1) _loadPopular();
+            },
+            tabs: const [Tab(text: 'Моя'), Tab(text: 'Популярное'), Tab(text: 'Поиск')],
+          ),
+          Expanded(child: VkAuthPage(onSuccess: () => setState(() {}))),
+        ],
+      );
+    }
+
     return Column(children: [
       TabBar(
         controller: _tab,
@@ -161,6 +177,22 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
         },
         tabs: const [Tab(text: 'Моя'), Tab(text: 'Популярное'), Tab(text: 'Поиск')],
       ),
+      if (!isAuth)
+        Material(
+          color: theme.colorScheme.primaryContainer,
+          child: InkWell(
+            onTap: () => setState(() => _tab.index = 0),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(children: [
+                Icon(Icons.info_outline, size: 16, color: theme.colorScheme.onPrimaryContainer),
+                const SizedBox(width: 8),
+                Expanded(child: Text('Войдите в VK ID для избранного • Поиск работает без логина', style: TextStyle(fontSize: 12, color: theme.colorScheme.onPrimaryContainer))),
+                Text('Войти', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: theme.colorScheme.primary)),
+              ]),
+            ),
+          ),
+        ),
       Padding(
         padding: const EdgeInsets.all(10),
         child: Row(children: [

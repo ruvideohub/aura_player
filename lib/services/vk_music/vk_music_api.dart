@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'vk_token_storage.dart';
+import '../vk/vk_api.dart';
 
 class VkTrack {
   final int ownerId;
@@ -75,9 +76,15 @@ class VkMusicApi {
     return items.map((e) => VkTrack.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  Future<String> _effectiveToken() async {
+    final t = _storage.token;
+    if (t != null && t.isNotEmpty) return t;
+    // L0: анонимный токен — поиск/популярное работают без логина
+    return await VkApi.getAnonymToken(client: _http);
+  }
+
   Future<List<VkTrack>> search(String q, {int count = 50}) async {
-    final token = _storage.token;
-    if (token == null) throw Exception('Not authorized');
+    final token = await _effectiveToken();
     final uri = Uri.parse('$_api/audio.search').replace(queryParameters: {
       'q': q, 'count': '$count', 'v': _v, 'access_token': token,
     });
@@ -88,8 +95,7 @@ class VkMusicApi {
   }
 
   Future<List<VkTrack>> getPopular({int count = 50}) async {
-    final token = _storage.token;
-    if (token == null) throw Exception('Not authorized');
+    final token = await _effectiveToken();
     final uri = Uri.parse('$_api/audio.getPopular').replace(queryParameters: {
       'count': '$count', 'v': _v, 'access_token': token,
     });
