@@ -33,61 +33,59 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
   }
 
   Future<void> _loadWithClient(String clientId, SharedPreferences prefs, VkAccountManager mgr) async {
-    // Генерим PKCE state/verifier под конкретный clientId
-    final url = VkApi.oauthAuthorizeUrl(
-      codeChallenge: '', // для oauth.vk.com implicit игнорируется
-      state: DateTime.now().millisecondsSinceEpoch.toString(),
-      clientId: clientId,
-    );
-    // Перезаписываем через startLogin чтобы сохранить state для проверки
     final start = await mgr.startLogin(prefs, clientIdOverride: clientId);
     final finalUrl = start.authorizeUrl;
     setState(() {
       _authorizeUrl = finalUrl;
       _loading = false;
       _error = null;
+      _successFired = false;
     });
-    // Пересоздаём контроллер если уже был
-    try {
-      _controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setNavigationDelegate(NavigationDelegate(
-          onNavigationRequest: (req) async {
-            if (req.url.contains('blank.html') || req.url.contains('oauth.vk.')) {
-              final parsed = await _handleRedirect(req.url, prefs);
-              if (parsed) return NavigationDecision.prevent;
-            }
-            // Ловим Unknown method passed [3] прямо на странице ошибки oauth
-            if (req.url.contains('error=') || req.url.contains('Unknown%20method')) {
-              _tryFallback('Ошибка OAuth: ${req.url}');
-              return NavigationDecision.prevent;
-            }
-            return NavigationDecision.navigate;
-          },
-          onPageFinished: (url) async {
-            if (url.contains('blank.html')) {
-              final ok = await _handleRedirect(url, prefs);
-              // blank с 405 без токена — считаем ошибкой и пробуем фоллбек
-              if (!ok && !url.contains('access_token=') && !url.contains('code=')) {
-                // проверим содержимое страницы на Unknown method
-                _checkPageForError();
-              }
-            }
-          },
-          onWebResourceError: (err) async {
-            // 405 на blank.html — норма, но без токена — пробуем фоллбек
-            if (err.url?.contains('blank.html') == true) {
-              await Future.delayed(const Duration(milliseconds: 500));
-              // если токен не выловили — фоллбек
-            }
-          },
-        ))
-        ..loadRequest(Uri.parse(finalUrl));
-      setState(() {});
-    } catch (_) {
-      // fallback если контроллер уже создан — просто грузим
-      _controller.loadRequest(Uri.parse(finalUrl));
-    }
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setNavigationDelegate(NavigationDelegate(
+        onNavigationRequest: (req) async {
+          // Любой URL с токеном — сразу ловим (даже с 405)
+          if (req.url.contains('access_token=')) {
+            final ok = await _handleRedirect(req.url, prefs);
+            if (ok) return NavigationDecision.prevent;
+          }
+          if (req.url.contains('blank.html') || req.url.contains('oauth.vk.')) {
+            final parsed = await _handleRedirect(req.url, prefs);
+            if (parsed) return NavigationDecision.prevent;
+          }
+          if (req.url.contains('Unknown%20method') || req.url.contains('error_code=3')) {
+            _tryFallback('Unknown method [3] на $clientId');
+            return NavigationDecision.prevent;
+          }
+          return NavigationDecision.navigate;
+        },
+        onUrlChange: (change) async {
+          final u = change.url ?? '';
+          if (u.contains('access_token=')) {
+            await _handleRedirect(u, prefs);
+          }
+        },
+        onPageFinished: (url) async {
+          // blank.html приходит даже с 405 — фрагмент уже в url
+          if (url.contains('blank.html') || url.contains('access_token=')) {
+            await _handleRedirect(url, prefs);
+          }
+          // Проверяем текст страницы на Unknown method
+          if (url.contains('oauth.vk.com') || url.contains('blank.html')) {
+            _checkPageForError();
+          }
+        },
+        onWebResourceError: (err) async {
+          // WebView может отдать 405 как ошибку — но url уже содержит токен
+          final u = err.url ?? '';
+          if (u.contains('access_token=')) {
+            await _handleRedirect(u, prefs);
+          }
+        },
+      ))
+      ..loadRequest(Uri.parse(finalUrl));
+    setState(() {});
   }
 
   Future<void> _tryFallback(String reason) async {
@@ -125,32 +123,51 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
     await _loadWithClient(VkApi.oauthClientId, prefs, mgr);
   }
 
+  bool _successFired = false;
   Future<bool> _handleRedirect(String url, SharedPreferences prefs) async {
-    // Пытаемся разобрать как PKCE redirect
+    // 1) Сначала всегда пробуем прямой токен из фрагмента — для oauth.vk.com он приходит даже с 405
+    if (url.contains('access_token=')) {
+      final token = _extractToken(url);
+      if (token != null && token.isNotEmpty) {
+        await prefs.setString('vk_account_state_secure_access_token', token);
+        await prefs.setString('vk_music_token', token);
+        // user_id тоже в фрагменте — сохраним для audio.get
+        try {
+          final frag = Uri.parse(url).fragment;
+          final qp = Uri.splitQueryString(frag);
+          final uid = qp['user_id'];
+          if (uid != null) await prefs.setInt('vk_account_state_secure_user_id', int.tryParse(uid) ?? 0);
+          final exp = qp['expires_in'];
+          if (exp != null) await prefs.setInt('vk_account_state_secure_expires_at_ms', DateTime.now().millisecondsSinceEpoch + (int.tryParse(exp) ?? 86400) * 1000);
+        } catch (_) {}
+        if (!_successFired && mounted) {
+          _successFired = true;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('VK ID: вход успешен (${_currentClientId})')));
+          widget.onSuccess();
+        }
+        return true;
+      }
+    }
+    // 2) PKCE code flow для id.vk.com
     final mgr = ref.read(vkAccountManagerProvider);
     final err = await mgr.handleRedirect(url, prefs);
     if (err == null) {
-      if (mounted) {
+      if (!_successFired && mounted) {
+        _successFired = true;
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('VK ID: вход успешен')));
         widget.onSuccess();
       }
       return true;
     }
-    // Если это не наш PKCE формат, пробуем fallback: прямой токен в фрагменте
-    if (url.contains('access_token=')) {
-      final token = _extractToken(url);
-      if (token != null) {
-        await prefs.setString('vk_account_state_secure_access_token', token);
-        // Для совместимости со старым хранилищем
-        await prefs.setString('vk_music_token', token);
-        if (mounted) widget.onSuccess();
-        return true;
+    // 3) Показываем ошибку только если это реально редирект с ошибкой
+    if (url.contains('blank.html') && (url.contains('error') || url.contains('code='))) {
+      if (url.contains('error=') && !url.contains('access_token=')) {
+        // access_token мог быть рядом с error=405 — уже поймали выше
+        if (mounted) setState(() => _error = err);
+        return false;
       }
     }
-    // Показать ошибку только если это действительно редирект с code/state
-    if (url.contains('code=') || url.contains('error')) {
-      setState(() => _error = err);
-    }
+    // Для других URL не спамим ошибкой — просто ждём токен
     return false;
   }
 
