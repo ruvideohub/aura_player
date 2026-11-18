@@ -7,7 +7,7 @@ class VkTrack {
   final int id;
   final String title;
   final String artist;
-  final String? url; // mp3/m3u8, может быть пустой пока не резолвнули
+  final String? url;
   final int duration;
   final String? cover;
   VkTrack({required this.ownerId, required this.id, required this.title, required this.artist, this.url, required this.duration, this.cover});
@@ -25,20 +25,20 @@ class VkTrack {
   }
 }
 
-/// Минимальный порт KMP VkApiSource на Dart (audio.get, search, popular, auth)
 class VkMusicApi {
   static const _oauth = 'https://oauth.vk.com/token';
   static const _api = 'https://api.vk.com/method';
-  static const _v = '5.199';
-  static const _clientId = '2274003';
-  static const _clientSecret = 'hHbZxrka2uZ6jB1inYsH';
-  static const _ua = 'VKAndroidApp/4.13.1-1206 (Android 4.4.3; SDK 19; armeabi; ; ru)';
+  static const _v = '5.131';
+  // VK site (6287487) — актуальный незабаненный ID, как просил пользователь
+  static const _clientId = '6287487';
+  static const _clientSecret = 'QbYic1K3lEV5kTGiqlq2';
+  static const _ua = 'VKAndroidApp/8.12 (Android 11; SDK 30; arm64-v8a; ru; com.vkontakte.android)';
 
   final http.Client _http;
   final VkTokenStorage _storage;
   VkMusicApi(this._http, this._storage);
 
-  // ---- Auth (grant_type=password) с поддержкой captcha/2fa как в AuthFlow ----
+  // Старый прямой логин оставлен как fallback, но помечен deprecated — лучше через VkIdAuth или WebView
   Future<void> auth(String login, String password, {String? captchaSid, String? captchaKey, String? code}) async {
     final uri = Uri.parse(_oauth).replace(queryParameters: {
       'grant_type': 'password',
@@ -46,7 +46,7 @@ class VkMusicApi {
       'client_secret': _clientSecret,
       'username': login,
       'password': password,
-      'scope': 'audio,offline',
+      'scope': 'audio,offline,messages',
       '2fa_supported': '1',
       'v': _v,
       if (captchaSid != null) 'captcha_sid': captchaSid,
@@ -56,10 +56,9 @@ class VkMusicApi {
     final r = await _http.get(uri, headers: {'User-Agent': _ua});
     final j = jsonDecode(r.body) as Map<String, dynamic>;
     if (j.containsKey('access_token')) {
-      await _storage.save(j['access_token'] as String, (j['user_id'] as int));
+      await _storage.save(j['access_token'] as String, (j['user_id'] as int? ?? 0));
       return;
     }
-    // пробрасываем ошибку для UI (captcha_img, validation)
     throw VkAuthException(j);
   }
 

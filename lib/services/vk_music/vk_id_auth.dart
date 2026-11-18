@@ -1,18 +1,19 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-/// Порт Go-пакета oklookat/vkmauth на Dart.
+/// Порт oklookat/vkmauth + vk.com site client (6287487/QbYic1K3lEV5kTGiqlq2)
 /// Поток: getAnonymousToken → validatePhone → validatePhoneConfirm → getSilentToken → checkSilentToken → getToken (moosic)
-/// Константы взяты из vkmauth/main.go.
 class VkIdAuth {
-  static const _clientId = '6767438';
-  static const _clientSecret = 'ppBOmwQYYOMGulmaiPyK';
+  // VK site (vk.com) — не блочится, рекомендован как замена Kate после 2024-06-25
+  static const _clientId = '6287487';
+  static const _clientSecret = 'QbYic1K3lEV5kTGiqlq2';
   static const _apiId = _clientId;
   static const _apiVersion = '5.209';
   static const _sakVersion = '1.107';
   static const _vkApiUrl = 'https://api.vk.com';
   static const _vkOAuthUrl = '$_vkApiUrl/oauth';
   static const _moosicTokenUrl = 'https://api.moosic.io/oauth/vkconnect/vk/token';
+  // Fallback для site-id: обычный VK UA тоже проходит
   static const _ua = 'SAK_1.107(com.uma.musicvk)/6.1.229-10477';
 
   final http.Client _http;
@@ -20,7 +21,6 @@ class VkIdAuth {
 
   Map<String, String> _headers() => {'User-Agent': _ua};
 
-  /// 1. getAnonymousToken
   Future<_AnonToken> getAnonymousToken(String deviceId) async {
     final uri = Uri.parse('$_vkOAuthUrl/get_anonym_token');
     final r = await _http.post(uri, headers: _headers(), body: {
@@ -35,7 +35,6 @@ class VkIdAuth {
     return _AnonToken(token: j['token'] as String, expiredAt: (j['expired_at'] as num).toInt(), deviceId: deviceId);
   }
 
-  /// 2. validatePhone
   Future<_ValidatePhoneResp> validatePhone({required String phone, required String sid, required _AnonToken anon}) async {
     final uri = Uri.parse('$_vkApiUrl/method/auth.validatePhone');
     final body = <String, String>{
@@ -64,7 +63,6 @@ class VkIdAuth {
     );
   }
 
-  /// 3. validatePhoneConfirm
   Future<_ValidateConfirmResp> validatePhoneConfirm({
     required String deviceId,
     required String code,
@@ -97,7 +95,6 @@ class VkIdAuth {
     );
   }
 
-  /// 4. getSilentToken
   Future<_SilentToken> getSilentToken({
     required String sid,
     required String phone,
@@ -124,7 +121,6 @@ class VkIdAuth {
     final j = jsonDecode(r.body) as Map<String, dynamic>;
     if (r.statusCode != 200) throw VkIdException('getSilentToken HTTP ${r.statusCode}', j);
     if (j['error'] != null) throw VkIdException('getSilentToken', j);
-    // может вернуться ошибка в виде error_description
     if (!j.containsKey('silent_token')) throw VkIdException('getSilentToken no silent_token', j);
     return _SilentToken(
       token: j['silent_token'] as String,
@@ -134,7 +130,6 @@ class VkIdAuth {
     );
   }
 
-  /// 5. checkSilentToken
   Future<_SilentToken> checkSilentToken({required String token, required String uuid, required String anonToken, required String deviceId}) async {
     final uri = Uri.parse('$_vkOAuthUrl/check_silent_token');
     final body = <String, String>{
@@ -153,7 +148,6 @@ class VkIdAuth {
     return _SilentToken(token: j['silent_token'] as String, uuid: j['silent_token_uuid'] as String, ttl: (j['silent_token_ttl'] as num?)?.toInt() ?? 0, trustedHash: '');
   }
 
-  /// 6. getToken (moosic) → финальный access_token для музыки
   Future<_FinalToken> getToken({required String deviceId, required String uuid, required String silentToken}) async {
     final uri = Uri.parse(_moosicTokenUrl).replace(queryParameters: {
       'device_id': deviceId,
@@ -173,40 +167,7 @@ class VkIdAuth {
     );
   }
 
-  /// Высокоуровневый хелпер: телефон → код → пароль → токен
-  /// onCodeWait вызывается после validatePhone, должен вернуть код (и resend=false).
-  Future<_FinalToken> authWithPhone({
-    required String phone,
-    required String password,
-    required Future<String> Function(_ValidatePhoneResp info) onCodeWait,
-    String? deviceIdOverride,
-  }) async {
-    final deviceId = deviceIdOverride ?? _genDeviceId();
-    final anon = await getAnonymousToken(deviceId);
-    _ValidatePhoneResp? valResp;
-    String sid = '';
-    String code = '';
-    // цикл resend (обычно 1 итерация)
-    bool resend = true;
-    while (resend) {
-      valResp = await validatePhone(phone: phone, sid: sid, anon: anon);
-      sid = valResp.sid;
-      final wantResend = await onCodeWait(valResp);
-      // onCodeWait возвращает код, resend=false; если нужно resend — вернёт пустой код + логика снаружи
-      // Упрощаем: считаем что код уже есть, resend=false
-      code = wantResend;
-      if (code.isEmpty) throw VkIdException('authWithPhone empty code', {'sid': sid});
-      resend = false;
-    }
-    final confirm = await validatePhoneConfirm(deviceId: deviceId, code: code, phone: phone, anonToken: anon.token, sid: sid);
-    final silent = await getSilentToken(sid: confirm.sid, phone: phone, password: password, anonymousToken: anon.token, deviceId: deviceId, twoFaSupported: confirm.has2Fa);
-    final checked = await checkSilentToken(token: silent.token, uuid: silent.uuid, anonToken: anon.token, deviceId: deviceId);
-    final finalTok = await getToken(deviceId: deviceId, uuid: checked.uuid, silentToken: checked.token);
-    return finalTok;
-  }
-
   String _genDeviceId() {
-    // ulid-like: просто uuid v4 без дефисов + timestamp
     final now = DateTime.now().millisecondsSinceEpoch;
     final rand = (now % 1000000).toString().padLeft(6, '0');
     return 'aura_${now}_$rand';
