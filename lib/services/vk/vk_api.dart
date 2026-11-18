@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 /// Порт VkApi.kt — единая карта эндпоинтов.
 /// Никаких Android-зависимостей, только dart:convert / stdlib.
