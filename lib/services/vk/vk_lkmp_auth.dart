@@ -1,9 +1,66 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:math';
+import 'dart:ui' show PlatformDispatcher;
 import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// Порт LKMP_34_2.0.2.apk — 1:1 по api/N1_e.java (HTTP-ядро) и api/m1_f.java (логика).
+///
+/// Флоу: auth.getAnonymToken → auth.validateAccount → ecosystem.sendOtp{Sms,Push,Email}
+/// → ecosystem.checkOtp → oauth/token (grant_type=phone_confirmation_sid)
+/// → пост-логин (execute.getUserInfo func_v=33 needExchangeToken=1 → exchange_token,
+/// auth.refreshToken, account.getProfileInfo).
+///
+/// Что исправлено относительно прежней версии (см. README_FIX.md):
+///  1. oauth/token теперь на https://api.vk.ru/oauth/token с grant_type=phone_confirmation_sid,
+///     sid, anonymous_token, libverify_support и т.д. (как m1_f.a), а не grant_type=password.
+///  2. checkOtp передаёт verification_method (g1_RunnableC0313D.java:124).
+///  3. Добавлен ecosystem.sendOtp* (m1_f.f) — без него SMS/push/email не отправляются.
+///  4. getVerificationMethods парсит response.methods[] (B_RunnableC0023l0.java:127),
+///     а не несуществующее response.verification_methods.
+///  5. Cookie-хранилище как CookieManager(ACCEPT_ALL) в N1_e.java:96-98.
+///  6. Пост-логин с получением exchange_token (m1_f.b) — без него refresh невозможен.
+///  7. refreshByExchangeToken парсит fragment-ответ "#access_token=..." (N1_e.h:346-356).
+///  8. Убран ручной Accept-Encoding: gzip — dart:io сам добавляет gzip и распаковывает,
+///     иначе тело ответа могло приходить нераспакованным и jsonDecode падал.
+///  9. Обработка капчи (error_code 14 и need_captcha) и flood (error 9) через типизированное
+///     исключение — UI показывает капчу вместо «блокировки».
+/// 10. Retry: 3 сетевые попытки (N1.e.e) и до 3 повторов при 1117 с обменом exchange-токена
+///     (N1_b.java case 0).
+/// 11. getAnonymToken: /oauth/get_anonym_token отвечает ПЛОСКИМ {"token","expired_at"}
+///     (обёртки response нет — она есть только у /method/*), прежняя версия читала только
+///     response.token и всегда падала с «Ошибка получения аноним-токена», хотя сервер
+///     возвращал валидный токен. Добавлены: чтение плоского token, fallback на
+///     /method/auth.getAnonymToken (N1.e.b) и тело ответа VK в тексте ошибки.
+/// 12. Во все вызовы /method/* (validateAccount, sendOtp*, getVerificationMethods,
+///     checkOtp) и в oauth/token (sid-ветка) возвращён параметр v=5.205 — в порте
+///     раунда 2 он был потерян, а без него VK отвечает ошибкой 8 «version is
+///     required / versions below 5.81 are deprecated» (в эталоне v=5.276 есть в
+///     каждом method-вызове). Проверено живьём: без v → код 8; с v=5.205 →
+///     getServerTime отвечает временем, validateAccount уходит в антифрод-капчу,
+///     а не в ошибку версии.
+/// 13. РЕАЛЬНАЯ идентификация устройства через нативный канал
+///     aura.player/native → deviceIdentity (MainActivity.kt): android_id из
+///     Settings.Secure + Build.MODEL/ID/MANUFACTURER/BRAND/TYPE/abi — как A.b.y()
+///     в LKMP. Прежние СЛУЧАЙНЫЙ android_id и фейковый Nexus 5X гарантированно
+///     ловили антифрод-капчу (код 14) уже на validateAccount на реальном телефоне.
+/// 14. UA динамический с реальными полями устройства, версия 8.175-51775 как в
+///     эталоне; /method/* переведены на v=5.276, sak_version=1.144.0 и ПОЛНЫЙ
+///     supported_ways (12 способов) — 1:1 с m1/f.java:353.
+/// 15. Капча: captcha_img грузится с хедерами клиента (captchaImageHeaders), при
+///     ошибке загрузки или пустой картинке — кнопка смарт-капчи VK ID
+///     (redirect_uri → VkSmartCaptchaPage в vk_lkmp_auth_page.dart) с ретраем
+///     после прохождения (postMessage vk-sak-sdk → success_token/captcha_key).
+
+// ---------------------------------------------------------------------------
+// Типы результатов и ошибок
+// ---------------------------------------------------------------------------
+
+/// Капча (порт m1.h): приходит и как error_code=14 (поля внутри error),
+/// и как error=need_captcha в oauth/token (поля в корне ответа).
 class VkLkmpCaptcha {
   final String img;
   final String ratio;
@@ -30,6 +87,8 @@ class VkLkmpCaptcha {
   bool get isEmpty => img.isEmpty && sid.isEmpty;
 }
 
+/// Типизированная ошибка авторизации.
+/// kind: flood | captcha | invalid_client | need_validation | api | network
 class VkLkmpAuthException implements Exception {
   final String kind;
   final String message;
@@ -49,9 +108,11 @@ class VkLkmpAuthException implements Exception {
   String toString() => '[$kind] $message';
 }
 
+/// Результат входа по паролю (m1.f.a): либо успех (после пост-логина),
+/// либо VK потребовал 2FA-код — какой канал отправлять.
 class VkLkmpPasswordResult {
   final bool success;
-  final String otpChannel;
+  final String otpChannel; // sms | push | email — когда success == false
   final Map<String, dynamic> profile;
 
   const VkLkmpPasswordResult({
@@ -61,6 +122,7 @@ class VkLkmpPasswordResult {
   });
 }
 
+/// Пункт из ecosystem.getVerificationMethods (порт m1.C0450e).
 class VkLkmpVerificationMethod {
   final String name;
   final String info;
@@ -75,28 +137,51 @@ class VkLkmpVerificationMethod {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Сервис
+// ---------------------------------------------------------------------------
+
 class VkLkmpAuth {
   static const _clientId = '2274003';
   static const _clientSecret = 'hHbZxrka2uZ6jB1inYsH';
   static const _apiId = '2274003';
+  // Значения из нативного слоя libVKMPLite.so (расшифрованные строки 0x4460/0x4710/0x4820):
+  // v=5.205, sak_version=1.123 (oauth sid-флоу), 1.104 (password-grant и refresh),
+  // gaid захардкожен в .so, UA = VKAndroidApp/8.87-21014 (registerDevice app_version=21014).
   static const _v = '5.205';
   static const _sak = '1.123';
   static const _sak104 = '1.104';
+  // /method/*-слой — ровно как в эталоне LKMP (N1/e.java, m1/f.java):
+  // v=5.276 и sak_version=1.144.0 в каждом method-вызове.
+  static const _methodV = '5.276';
+  static const _methodSak = '1.144.0';
   static const _gaidConst = '236fd493-f8a3-4c52-97d4-acae50a72221';
   static const _flow = 'tg_flow';
   static const _flowNoPwd = 'auth_without_password';
-  static const _host = 'https://api.vk.ru';
+  static const _host = 'https://api.vk.ru'; // НЕ .com и не oauth.vk.ru!
 
+  /// Состояние как m1.C0448c (AuthInfo): заполняется по мере флоу.
   String sid = '';
   String login = '';
   String rememberHash = '';
   bool canSkipPassword = false;
 
   final http.Client _http;
+
+  /// Cookie-хранилище: в LKMP это CookieManager(ACCEPT_ALL), подключённый к клиенту
+  /// (N1_e.java:96-98). VK использует cookies для анти-фрода — запросы без cookie-истории
+  /// чаще уводятся в капчу/флуд.
   final Map<String, String> _cookies = {};
 
   VkLkmpAuth(this._http);
 
+  // -------------------------------------------------------------------------
+  // Идентификаторы устройства (A.b.y, A.b.x, N1.e.g)
+  // -------------------------------------------------------------------------
+
+  /// LKMP: A.b.y() = android_id + ':' + MD5(Build.MODEL+Build.ID+MANUFACTURER+BRAND+TYPE+os.arch),
+  /// где MD5 — с багом без ведущих нулей (Integer.toHexString(b & 255)). Хэш может быть
+  /// короче 32 символов — это воспроизводится 1:1 и так и должно быть.
   String _lkmpMd5NoPad(String s) {
     final digest = md5.convert(s.codeUnits).bytes;
     return digest.map((b) => (b & 0xFF).toRadixString(16)).join();
@@ -104,6 +189,20 @@ class VkLkmpAuth {
 
   Future<String> _deviceId() async {
     final p = await SharedPreferences.getInstance();
+    // Реальное устройство: android_id + хэш Build — идентификация как A.b.y() в
+    // LKMP. Фиктивный (случайный) идентификатор прежних версий заменяется на
+    // реальный при первом же вызове, дальше стабилен (Build не меняется).
+    await _ensureIdentity();
+    final idn = _identity;
+    if (idn != null && (idn['androidId'] ?? '').isNotEmpty) {
+      final dev = '${idn['androidId']}:'
+          '${_lkmpMd5NoPad("${idn['model']}${idn['buildId']}${idn['manufacturer']}${idn['brand']}${idn['type']}${idn['abi']}")}';
+      if (p.getString('vk_lkmp_device_id') != dev) {
+        await p.setString('vk_lkmp_device_id', dev);
+      }
+      return dev;
+    }
+    // Fallback (не Android или сбой канала) — прежний генератор Nexus 5X.
     final cached = p.getString('vk_lkmp_device_id');
     if (cached != null && cached.isNotEmpty) {
       final parts = cached.split(':');
@@ -111,6 +210,7 @@ class VkLkmpAuth {
       await p.remove('vk_lkmp_device_id');
     }
     final androidId = _randHex(16);
+    // Fallback-набор как в A.b.x(): Google Nexus 5X + arm64-v8a
     const model = 'Google Nexus 5X';
     const id = 'TP1A.221105.002';
     const manufacturer = 'Google';
@@ -122,16 +222,62 @@ class VkLkmpAuth {
     return dev;
   }
 
+  /// Реальная идентификация устройства через нативный канал (MainActivity.kt
+  /// → deviceIdentity): android_id (Settings.Secure) + Build.*. На не-Android
+  /// и при сбое канала — null, работает fallback.
+  static const _nativeChannel = MethodChannel('aura.player/native');
+  Map<String, String>? _identity;
+  bool _identityTried = false;
+
+  Future<void> _ensureIdentity() async {
+    if (_identityTried) return;
+    _identityTried = true;
+    if (!Platform.isAndroid) return;
+    try {
+      final r = await _nativeChannel.invokeMethod<Map>('deviceIdentity');
+      if (r != null && r.isNotEmpty) {
+        _identity = r.map((k, v) => MapEntry('$k', '${v ?? ''}'));
+      }
+    } catch (_) {}
+  }
+
+  /// В нативном слое gaid захардкожен (тела 0x4710/0x4820) — используем то же значение,
+  /// чтобы запросы не отличались от оригинального клиента.
   Future<String> _gaidStored() async => _gaidConst;
 
-  String _ua() =>
-      'VKAndroidApp/8.87-21014 (Android 12; SDK 31; arm64-v8a;Google Nexus 5X; ru; 1920x1080)';
+  /// A.b.x(): VKAndroidApp/<ver> (Android <RELEASE>; SDK <SDK>; <arch>; <MODEL>; ru; WxH).
+  /// Версия 8.175-51775 — как в эталоне LKMP; поля устройства — реальные.
+  String _ua() {
+    final idn = _identity;
+    if (idn != null && (idn['model'] ?? '').isNotEmpty) {
+      return 'VKAndroidApp/8.175-51775 (Android ${idn['osRelease']}; SDK ${idn['sdkInt']}; '
+          '${idn['abi']}; ${idn['model']}; ru; ${_screenSize()})';
+    }
+    return 'VKAndroidApp/8.175-51775 (Android 12; SDK 31; arm64-v8a;Google Nexus 5X; ru; 1920x1080)';
+  }
+
+  String _screenSize() {
+    try {
+      final view = PlatformDispatcher.instance.implicitView;
+      final sz = view?.physicalSize;
+      if (sz != null && sz.width > 0 && sz.height > 0) {
+        return '${sz.width.round()}x${sz.height.round()}';
+      }
+    } catch (_) {}
+    return '1920x1080';
+  }
 
   String _randHex(int len) =>
       List.generate(len, (_) => '0123456789abcdef'[Random.secure().nextInt(16)]).join();
 
+  // -------------------------------------------------------------------------
+  // HTTP-конверт (N1.e.d): заголовки, cookie, gzip, ретраи
+  // -------------------------------------------------------------------------
+
+  /// Разбор Set-Cookie (порт M1.a): значения DELETED удаляют cookie.
   void _rememberCookies(String? raw) {
     if (raw == null || raw.isEmpty) return;
+    // Делим по запятой ТОЛЬКО если дальше снова "name=" — чтобы не порвать Expires.
     final parts = raw.split(RegExp(r',(?=\s*[A-Za-z_][A-Za-z0-9_\-]*\s*=[^;])'));
     for (final part in parts) {
       final first = part.split(';').first.trim();
@@ -148,18 +294,24 @@ class VkLkmpAuth {
     }
   }
 
-  Map<String, String> _headers(String screen) => {
-        if (screen.isNotEmpty) 'X-Screen': screen,
-        'Cache-Control': 'no-cache',
-        'X-Get-Processing-Time': '1',
-        'Accept': 'image/webp',
-        'User-Agent': _ua(),
-        'X-VK-Android-Client': 'new',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
-        if (_cookies.isNotEmpty)
-          'Cookie': _cookies.entries.map((e) => '${e.key}=${e.value}').join('; '),
-      };
+  Future<Map<String, String>> _headers(String screen) async {
+    await _ensureIdentity();
+    return {
+      if (screen.isNotEmpty) 'X-Screen': screen,
+      'Cache-Control': 'no-cache',
+      'X-Get-Processing-Time': '1',
+      'Accept': 'image/webp',
+      // Accept-Encoding НЕ ставим вручную: dart:io HttpClient сам добавляет gzip
+      // и сам распаковывает ответ. Ручной заголовок приводил к бинарному r.body.
+      'User-Agent': _ua(),
+      'X-VK-Android-Client': 'new',
+      'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
+      if (_cookies.isNotEmpty)
+        'Cookie': _cookies.entries.map((e) => '${e.key}=${e.value}').join('; '),
+    };
+  }
 
+  /// POST с разбором JSON и API-ошибок. Сетевые сбои ретраятся до 3 раз (N1.e.e()).
   Future<Map<String, dynamic>> _post(
     String url,
     Map<String, String> params,
@@ -169,7 +321,7 @@ class VkLkmpAuth {
     for (var attempt = 0; attempt < 3; attempt++) {
       try {
         final r = await _http
-            .post(Uri.parse(url), headers: _headers(screen), body: params)
+            .post(Uri.parse(url), headers: await _headers(screen), body: params)
             .timeout(const Duration(seconds: 20));
         _rememberCookies(r.headers['set-cookie']);
         final text = r.body;
@@ -212,13 +364,15 @@ class VkLkmpAuth {
       } on VkLkmpAuthException {
         rethrow;
       } catch (e) {
-        lastErr = e;
+        lastErr = e; // сеть/таймаут — повторяем
       }
     }
     throw VkLkmpAuthException(
         kind: 'network', message: 'Сетевая ошибка после 3 попыток: $lastErr');
   }
 
+  /// Приставка капчи к параметрам — как в LKMP при повторном сабмите (README §7):
+  /// captcha_sid, captcha_key, captcha_attempt=1, captcha_ts, is_sound_captcha=0.
   Map<String, String> _captchaParams(VkLkmpCaptcha c, String key) => {
         'captcha_sid': c.sid,
         'captcha_key': key,
@@ -226,6 +380,10 @@ class VkLkmpAuth {
         if (c.ts.isNotEmpty) 'captcha_ts': c.ts,
         'is_sound_captcha': '0',
       };
+
+  // -------------------------------------------------------------------------
+  // Аноним-токен (N1.e.b) с кешем на 55 минут (m1.f.c)
+  // -------------------------------------------------------------------------
 
   String? _cachedAnon;
   int _anonTs = 0;
@@ -237,6 +395,13 @@ class VkLkmpAuth {
   }
 
   Future<String> getAnonymToken() async {
+    // Нативный initAuth: POST https://api.vk.ru/oauth/get_anonym_token (строка 0x46a0),
+    // тело = client_id/secret/lang/https/api_id (0x4640) + &device_id + &v.
+    // ВАЖНО (проверено живым запросом 2026-11-18): этот oauth-эндпоинт отвечает
+    // ПЛОСКИМ JSON {"token": "anonym.…", "expired_at": …} — БЕЗ обёртки "response".
+    // Обёртка response есть только у /method/*-эндпоинтов. Прежняя версия читала
+    // только response.token, не находила его и бросала «Ошибка получения аноним-
+    // токена», хотя сервер возвращал валидный токен.
     Map<String, dynamic> j = await _post('$_host/oauth/get_anonym_token', {
       'client_id': _clientId,
       'client_secret': _clientSecret,
@@ -249,20 +414,22 @@ class VkLkmpAuth {
     dynamic token = j['token'];
     if (token is! String || token.isEmpty) {
       final resp = j['response'];
-      if (resp is Map) token = resp['token'];
+      if (resp is Map) token = resp['token']; // envelope-формат (на будущее)
     }
     if (token is String && token.isNotEmpty) {
       _cachedAnon = token;
       _anonTs = DateTime.now().millisecondsSinceEpoch;
       return token;
     }
+    // Fallback: метод-эндпоинт из LKMP-референса (N1.e.b), ответ в response.token.
+    // Проверен живьём: тоже возвращает токен (v=5.276, UA 8.175-51775).
     try {
       final j2 = await _post('$_host/method/auth.getAnonymToken', {
         'client_id': _clientId,
         'client_secret': _clientSecret,
         'device_id': await _deviceId(),
         'lang': 'ru',
-        'v': '5.276',
+        'v': _methodV,
         'https': '1',
         'api_id': _apiId,
       }, 'auth_start_with_phone');
@@ -275,6 +442,7 @@ class VkLkmpAuth {
       }
       j = j2;
     } on VkLkmpAuthException {
+      // fallback недоступен — покажем исходный ответ oauth-запроса
     }
     throw VkLkmpAuthException(
         kind: 'api',
@@ -282,6 +450,7 @@ class VkLkmpAuth {
         raw: j);
   }
 
+  /// Короткое тело ответа для текста ошибки — чтобы в UI было видно, что вернул VK.
   String _shortBody(Map<String, dynamic> j) {
     try {
       final s = jsonEncode(j);
@@ -290,6 +459,10 @@ class VkLkmpAuth {
       return '$j';
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Шаг 1: auth.validateAccount (m1.f.i)
+  // -------------------------------------------------------------------------
 
   Future<Map<String, dynamic>> validateAccount({
     required String phone,
@@ -301,16 +474,17 @@ class VkLkmpAuth {
     final res = await _post('$_host/method/auth.validateAccount', {
       'login': phone,
       'access_token': anon,
-      'supported_ways': 'push,email,sms,callreset,password,reserve_code,codegen',
+      'supported_ways':
+          'push,email,sms,callreset,password,reserve_code,codegen,official_messenger,max_code,passkey,libverify,max_messenger',
       'force_password': '0',
       'flow_type': _flowNoPwd,
-      'sak_version': _sak,
+      'sak_version': _methodSak,
       'gaid': await _gaidStored(),
       'device_id': await _deviceId(),
       'lang': 'ru',
       'https': '1',
       'api_id': _apiId,
-      'v': _v,
+      'v': _methodV,
       if (captcha != null && captchaKey.isNotEmpty) ..._captchaParams(captcha, captchaKey),
     }, 'auth_start_with_phone');
     final resp = res['response'];
@@ -320,6 +494,10 @@ class VkLkmpAuth {
     }
     return res;
   }
+
+  // -------------------------------------------------------------------------
+  // Шаг 2: ecosystem.sendOtpSms / sendOtpPush / sendOtpEmail (m1.f.f)
+  // -------------------------------------------------------------------------
 
   Future<Map<String, dynamic>> sendOtp({required String channel}) async {
     final method = switch (channel) {
@@ -333,17 +511,23 @@ class VkLkmpAuth {
       'access_token': anon,
       'lang': 'ru',
       'device_id': await _deviceId(),
-      'sak_version': _sak,
+      'sak_version': _methodSak,
       'flow_type': _flow,
       'gaid': await _gaidStored(),
       'https': '1',
       'api_id': _apiId,
-      'v': _v,
+      'v': _methodV,
     }, 'auth');
     final resp = res['response'];
     if (resp is Map && resp['sid'] != null) sid = '${resp['sid']}';
     return res;
   }
+
+  // -------------------------------------------------------------------------
+  // «Другой способ»: ecosystem.getVerificationMethods (N1.e.c)
+  // Ответ: response.methods[] с полями info/priority/timeout/name
+  // (B_RunnableC0023l0.java:127, m1.C0450e)
+  // -------------------------------------------------------------------------
 
   Future<List<VkLkmpVerificationMethod>> getVerificationMethods() async {
     final anon = await _cachedAnonToken();
@@ -352,12 +536,12 @@ class VkLkmpAuth {
       'access_token': anon,
       'lang': 'ru',
       'device_id': await _deviceId(),
-      'sak_version': _sak,
+      'sak_version': _methodSak,
       'flow_type': _flow,
       'gaid': await _gaidStored(),
       'https': '1',
       'api_id': _apiId,
-      'v': _v,
+      'v': _methodV,
     }, 'auth');
     final resp = res['response'];
     final list = (resp is Map ? resp['methods'] : null) as List?;
@@ -373,6 +557,11 @@ class VkLkmpAuth {
         .toList();
   }
 
+  // -------------------------------------------------------------------------
+  // Шаг 3: ecosystem.checkOtp (N1.e.a + g1_RunnableC0313D)
+  // ВАЖНО: verification_method обязателен — без него VK отклоняет проверку.
+  // -------------------------------------------------------------------------
+
   Future<Map<String, dynamic>> checkOtp({
     required String code,
     required String verificationMethod,
@@ -387,12 +576,12 @@ class VkLkmpAuth {
       'access_token': anon,
       'lang': 'ru',
       'device_id': await _deviceId(),
-      'sak_version': _sak,
+      'sak_version': _methodSak,
       'flow_type': _flow,
       'gaid': await _gaidStored(),
       'https': '1',
       'api_id': _apiId,
-      'v': _v,
+      'v': _methodV,
       if (captcha != null && captchaKey.isNotEmpty) ..._captchaParams(captcha, captchaKey),
     }, 'auth');
     final resp = res['response'];
@@ -404,12 +593,23 @@ class VkLkmpAuth {
     return res;
   }
 
+  // -------------------------------------------------------------------------
+  // Шаг 4: oauth/token по паролю (m1.f.a)
+  // ВАЖНО: grant_type=phone_confirmation_sid (НЕ password!), host api.vk.ru,
+  // sid + anonymous_token + libverify_support + device_trusted_hash_supported.
+  // -------------------------------------------------------------------------
+
   Future<VkLkmpPasswordResult> loginWithPassword({
     required String password,
     VkLkmpCaptcha? captcha,
     String captchaKey = '',
   }) async {
     final anon = await _cachedAnonToken();
+    // Нативные тела oauth/token из libVKMPLite.so:
+    //  0x4710 (пароль): grant_type=password, sak_version=1.104, v=5.205,
+    //                   flow_type=auth_without_password, gaid захардкожен;
+    //  0x4460 (по sid после OTP): grant_type=phone_confirmation_sid, sak_version=1.123,
+    //                   flow_type=tg_flow, device_id + device_trusted_hash_supported.
     final Map<String, String> params;
     if (password.isEmpty) {
       params = {
@@ -420,7 +620,6 @@ class VkLkmpAuth {
         'grant_type': 'phone_confirmation_sid',
         'sid': sid,
         'anonymous_token': anon,
-        'v': _v,
         '2fa_supported': '1',
         'supported_ways': 'push,email',
         'https': '1',
@@ -428,6 +627,7 @@ class VkLkmpAuth {
         'sak_version': _sak,
         'flow_type': _flow,
         'api_id': _apiId,
+        'v': _v,
         if (captcha != null && captchaKey.isNotEmpty) ..._captchaParams(captcha, captchaKey),
       };
     } else {
@@ -451,6 +651,8 @@ class VkLkmpAuth {
     }
     final res = await _post('$_host/oauth/token', params, 'auth_password');
 
+    // Ошибки oauth — строкой в корне ответа (не API-конверт): need_captcha,
+    // need_validation, invalid_client (m1_f.a:100-140).
     final error = res['error'];
     if (error is String && error.isNotEmpty) {
       if (error == 'need_captcha') {
@@ -465,6 +667,7 @@ class VkLkmpAuth {
         final vt = '${res['validation_type'] ?? ''}';
         final vsid = '${res['validation_sid'] ?? ''}';
         if (vsid.isNotEmpty) sid = vsid;
+        // Как в LKMP: сами отправляем OTP нужным каналом и ведём на экран кода.
         if (vt == '2fa_sms' || vt == '2fa_push' || vt == '2fa_email') {
           final channel = vt == '2fa_sms' ? 'sms' : (vt == '2fa_push' ? 'push' : 'email');
           await sendOtp(channel: channel);
@@ -498,6 +701,12 @@ class VkLkmpAuth {
     return VkLkmpPasswordResult(success: true, profile: profile);
   }
 
+  // -------------------------------------------------------------------------
+  // Шаг 5: пост-логин (m1.f.b) — обязателен после получения access_token
+  // -------------------------------------------------------------------------
+
+  /// Общий вызов метода API (N1_b.java case 0): access_token сессии + lang/v/https/device_id,
+  /// БЕЗ X-Screen. При error_code 1117 — обмен exchange-токена и повтор (до 3 раз).
   Future<Map<String, dynamic>> _apiCall(
     String method,
     Map<String, String> params,
@@ -509,7 +718,7 @@ class VkLkmpAuth {
         ...params,
         'access_token': current,
         'lang': 'ru',
-        'v': _v,
+        'v': _methodV,
         'https': '1',
         'device_id': await _deviceId(),
       }, '');
@@ -528,6 +737,9 @@ class VkLkmpAuth {
     throw const VkLkmpAuthException(kind: 'api', message: 'Исчерпаны повторы запроса');
   }
 
+  /// Пост-логин: execute.getUserInfo (func_v=33, needExchangeToken=1) → exchange_token,
+  /// auth.refreshToken (ответ не используется, но запрос обязателен),
+  /// account.getProfileInfo → профиль. Сохраняет сессию (q.V: token/user_id/exchange_token).
   Future<Map<String, dynamic>> postLogin(Map<String, dynamic> tokenJson) async {
     final token = '${tokenJson['access_token'] ?? tokenJson['token'] ?? ''}';
     if (token.isEmpty) {
@@ -552,11 +764,13 @@ class VkLkmpAuth {
     try {
       await _apiCall('auth.refreshToken', const {}, token);
     } on VkLkmpAuthException catch (_) {
+      // LKMP игнорирует результат refreshToken
     }
     try {
       final pr = await _apiCall('account.getProfileInfo', const {}, token);
       if (pr['response'] is Map) profile = (pr['response'] as Map).cast<String, dynamic>();
     } on VkLkmpAuthException catch (_) {
+      // профиль не критичен для входа
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -567,12 +781,20 @@ class VkLkmpAuth {
     return profile;
   }
 
+  // -------------------------------------------------------------------------
+  // Обновление токена (N1.e.h): oauth/auth_by_exchange_token
+  // Ответ приходит ФРАГМЕНТОМ URL "#access_token=...&..." (N1_e.java:346-356),
+  // а не JSON — прежний порт всегда возвращал null.
+  // -------------------------------------------------------------------------
+
   Future<String?> refreshByExchangeToken() async {
     final prefs = await SharedPreferences.getInstance();
     final ex =
         prefs.getString('vk_exchange_token') ?? prefs.getString('vk_lkmp_exchange') ?? '';
     if (ex.isEmpty) return null;
 
+    // Тело из нативного слоя (0x4820): lang=en, v=5.205, sak_version=1.104, gaid const,
+    // initiator=expired_token; exchange_token/device_id добавляются как в N1.e.h.
     final body = {
       'lang': 'en',
       'https': '1',
@@ -588,6 +810,7 @@ class VkLkmpAuth {
     };
     final raw = await _postCaptureRedirect('$_host/oauth/auth_by_exchange_token', body);
 
+    // Парс "#key=value&..." как в N1_e.h
     String source = raw;
     final hashIdx = source.indexOf('#');
     if (hashIdx >= 0) source = source.substring(hashIdx + 1);
@@ -597,6 +820,7 @@ class VkLkmpAuth {
       if (i <= 0) continue;
       parsed[pair.substring(0, i).trim()] = Uri.decodeComponent(pair.substring(i + 1).trim());
     }
+    // Fallback: иногда может прийти обычный JSON
     if (!parsed.containsKey('access_token')) {
       try {
         final j = jsonDecode(raw);
@@ -620,18 +844,25 @@ class VkLkmpAuth {
     return token;
   }
 
+  /// Хедеры для загрузки captcha_img тем же клиентом, что и API-запросы
+  /// (Image.network без UA/Cookie VK может обслужить иначе — вплоть до 403/HTML).
+  Future<Map<String, String>> captchaImageHeaders() async {
+    await _ensureIdentity();
+    return {
+      'User-Agent': _ua(),
+      'Accept': 'image/webp,image/png,image/*;q=0.8,*/*;q=0.5',
+      'Referer': 'https://vk.ru/',
+      if (_cookies.isNotEmpty)
+        'Cookie': _cookies.entries.map((e) => '${e.key}=${e.value}').join('; '),
+    };
+  }
+
+  /// POST без следования редиректам: auth_by_exchange_token отвечает 302 с
+  /// Location: ...#access_token=... — именно фрагмент и нужно забрать.
   Future<String> _postCaptureRedirect(String url, Map<String, String> body) async {
     final req = http.Request('POST', Uri.parse(url))
       ..followRedirects = false
-      ..headers.addAll({
-        'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
-        'Cache-Control': 'no-cache',
-        'Accept': 'image/webp',
-        'User-Agent': _ua(),
-        'X-VK-Android-Client': 'new',
-        'X-Screen': 'auth_password',
-        if (_cookies.isNotEmpty) 'Cookie': _cookies.entries.map((e) => '${e.key}=${e.value}').join('; '),
-      })
+      ..headers.addAll(await _headers('auth_password'))
       ..body = body.entries.map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}').join('&');
     final streamed = await _http.send(req);
     final resp = await http.Response.fromStream(streamed);
