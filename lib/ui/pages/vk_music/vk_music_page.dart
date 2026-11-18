@@ -11,7 +11,7 @@ import '../../../services/library.dart';
 import '../../../services/settings.dart';
 import '../../../models/models.dart';
 import '../../../state/player_controller.dart';
-import '../vk_auth_page.dart';
+import '../vk_chrome_auth_page.dart';
 
 final sharedPrefsProvider = Provider<SharedPreferences>((ref) => throw UnimplementedError('sharedPrefsProvider not overridden in main'));
 
@@ -192,7 +192,7 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
             },
             tabs: const [Tab(text: 'Моя'), Tab(text: 'Популярное'), Tab(text: 'Поиск')],
           ),
-          Expanded(child: VkAuthPage(onSuccess: () => setState(() {}))),
+          Expanded(child: VkChromeAuthPage(onSuccess: () => setState(() {}))),
         ],
       );
     }

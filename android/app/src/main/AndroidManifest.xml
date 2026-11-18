@@ -84,6 +84,20 @@
             </intent-filter>
         </activity>
 
+            <!-- VK OAuth — Chrome Custom Tabs возврат -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="oauth.vk.ru" android:path="/blank.html" />
+                <data android:scheme="https" android:host="oauth.vk.com" android:path="/blank.html" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="aura" android:host="vk-oauth" />
+            </intent-filter>
         <!-- Foreground service только для музыки (видео не нужен) -->
         <service
             android:name=".AudioService"
