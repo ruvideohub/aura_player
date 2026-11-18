@@ -30,15 +30,19 @@ class VkApi {
     '6287487',
   ];
 
-  // vk.ru web — реальный client_id из браузера (ты вытащил 7879029)
-  static const oauthClientId = '7879029'; // web.api.vk.ru queue.subscribe
+  // VK ID — реальный клиент m.vk.ru / id.vk.ru (ты вытащил 7934655 silent_token)
+  static const oauthClientId = '7934655'; // id.vk.ru auth silent_token
   static const oauthClientIdCom = '2274003';
   static const oauthScope = 'video,friends,groups,wall';
   static const oauthScopeSite = 'audio,video,offline,friends,groups,wall';
   static const hostOAuthAuthorizeSite = 'https://oauth.vk.com/authorize';
   static const hostOAuthAuthorizeSiteRu = 'https://oauth.vk.ru/authorize';
-  static const oauthFallbackIds = <String>['6287487']; // фоллбек на старый site
+  static const hostVkId = 'https://id.vk.ru/auth';
+  // web client 7879029 оставляем для API вызовов queue.subscribe
+  static const webClientId = '7879029';
+  static const oauthFallbackIds = <String>['7879029', '6287487'];
   static const oauthFallbackScopes = {
+    '7934655': 'audio,video,offline,friends,groups,wall',
     '7879029': 'audio,video,offline,friends,groups,wall',
     '6287487': 'audio,video,offline,friends,groups,wall',
   };
@@ -197,8 +201,27 @@ class VkApi {
     String prompt = 'login',
     String clientId = oauthClientId,
   }) {
+    // VK ID 7934655 — silent_token как ты вытащил на m.vk.ru (isRedesigned, uuid, v=1.3.0)
+    if (clientId == '7934655') {
+      final uuid = 'aura-${DateTime.now().millisecondsSinceEpoch}';
+      const action = 'eyJuYW1lIjoibm9fcGFzc3dvcmRfZmxvdyIsImlucHV0X3R5cGUiOiJwaG9uZSIsInBhcmFtcyI6eyJ0eXBlIjoic2lnbl9pbiIsImNzcmZfaGFzaCI6ImMyOWI5ZGJmZmM5MTJkYTUyOCJ9fQ==';
+      final params = {
+        'isRedesigned': '1',
+        'action': action,
+        'is_redesigned': '1',
+        'initial_stats_info': 'eyJzb3VyY2UiOiJtYWluIiwic2NyZWVuIjoic3RhcnQifQ==',
+        'uuid': uuid,
+        'response_type': 'silent_token',
+        'v': '1.3.0',
+        'sdk_type': 'vkid',
+        'app_id': clientId,
+        'redirect_uri': 'https://m.vk.ru/login',
+      };
+      final qs = params.entries.map((e) => '${e.key}=${_urlEncode(e.value)}').join('&');
+      return '$hostVkId?$qs';
+    }
     final scope = oauthFallbackScopes[clientId] ?? oauthScopeSite;
-    final host = hostOAuthAuthorizeSite; // oauth.vk.com — как в браузере 7879029 тоже редиректит на id.vk.com/auth
+    final host = hostOAuthAuthorizeSite;
     final params = {
       'client_id': clientId,
       'scope': scope,
