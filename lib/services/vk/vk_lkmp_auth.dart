@@ -30,7 +30,13 @@ class VkLkmpAuth {
   Future<String> _deviceId() async {
     final p = await SharedPreferences.getInstance();
     var cached = p.getString('vk_lkmp_device_id');
-    if (cached != null && cached.isNotEmpty) return cached;
+    // миграция: старый AURA багал и резал hash до 8 символов (25 chars), LKMP — 49; если коротко — перегенерить
+    if (cached != null && cached.isNotEmpty) {
+      final parts = cached.split(':');
+      if (parts.length == 2 && parts[1].length >= 20) return cached;
+      // иначе старый баг — удаляем
+      await p.remove('vk_lkmp_device_id');
+    }
     // android_id как в LKMP — 16 hex, сохраняем стабильно
     final androidId = _randHex(16);
     // Build поля как в A.b.x() fallback: Google Nexus 5X + arm64-v8a
