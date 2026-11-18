@@ -91,16 +91,15 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
     }
     final track = MediaTrack(
       path: t.url!,
+      isVideo: false,
       title: t.title,
       artist: t.artist,
       album: '',
       durationMs: t.duration * 1000,
       sizeBytes: 0,
-      ext: 'mp3',
-      isVideo: false,
-      addedAt: DateTime.now(),
+      addedAt: DateTime.now().millisecondsSinceEpoch,
     );
-    await ref.read(playerController.notifier).open([track], 0);
+    await ref.read(playerProvider.notifier).open([track], 0);
     // автопереход не нужен — плеер внутри AudioPage покажет NowPlaying
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('▶ ${t.artist} — ${t.title}')));
   }

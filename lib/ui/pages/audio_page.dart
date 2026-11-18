@@ -27,7 +27,7 @@ enum _AudioSource { offline, vk }
 class _AudioPageState extends ConsumerState<AudioPage> {
   String _query = '';
   String _sort = 'title';
-  bool _showLibrary = false; // переключатель Плеер ↔ Библиотека когда трек играет
+  bool _showLibrary = false;
   _AudioSource _source = _AudioSource.offline;
 
   @override
@@ -39,12 +39,10 @@ class _AudioPageState extends ConsumerState<AudioPage> {
     final lib = ref.watch(libraryProvider);
     final theme = Theme.of(context);
 
-    // Если есть аудио-трек в плеере — по умолчанию плеер, но можем показать и библиотеку по кнопке
     if (current != null && !hasVideo) {
       if (_showLibrary) {
         return Column(
           children: [
-            // Узкий мини-бар плеера сверху чтобы не терять управление во время браузинга
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(border: Border(bottom: BorderSide(color: theme.dividerColor))),
@@ -80,12 +78,9 @@ class _AudioPageState extends ConsumerState<AudioPage> {
         children: [nowPlaying, const SizedBox(height: 16), SizedBox(height: 420, child: side)],
       );
     }
-    // Сбрасываем флаг когда плеер остановлен
     if (_showLibrary && (current == null || hasVideo)) {
       WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) setState(() => _showLibrary = false); });
     }
-
-    // Иначе — показываем библиотеку аудио (чтобы сканированные треки появлялись тут)
     return _audioLibrary(context, lib, player, theme);
   }
 
@@ -108,7 +103,6 @@ class _AudioPageState extends ConsumerState<AudioPage> {
   }
 
   Widget _audioLibrary(BuildContext context, LibraryController lib, PlayerController player, ThemeData theme) {
-    // VK режим — показываем каталог VK поверх офлайн-библиотеки
     if (_source == _AudioSource.vk) {
       return Column(
         children: [
@@ -122,52 +116,58 @@ class _AudioPageState extends ConsumerState<AudioPage> {
     final accent = theme.colorScheme.primary;
     final list = _filtered(lib);
 
-    // Пусто — дружелюбный placeholder
     if (lib.audio.isEmpty && list.isEmpty && _query.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.music_note_rounded, size: 72, color: accent),
-              const SizedBox(height: 16),
-              Text('Нет музыки', style: theme.textTheme.titleLarge),
-              const SizedBox(height: 8),
-              Text(
-                'Сканирование ещё не выполнено.\nОткрой файлы или запусти скан в Настройках.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.6)),
+      return Column(
+        children: [
+          _sourceToggle(theme),
+          Expanded(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.music_note_rounded, size: 72, color: accent),
+                    const SizedBox(height: 16),
+                    Text('Нет музыки', style: theme.textTheme.titleLarge),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Сканирование ещё не выполнено.\nОткрой файлы или запусти скан в Настройках.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.6)),
+                    ),
+                    const SizedBox(height: 20),
+                    Wrap(spacing: 12, alignment: WrapAlignment.center, children: [
+                      FilledButton.icon(
+                        onPressed: _openFiles,
+                        icon: const Icon(Icons.folder_open_rounded),
+                        label: const Text('Открыть файлы'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          if (lib.scanning) return;
+                          final messenger = ScaffoldMessenger.of(context);
+                          await lib.scan();
+                          messenger.showSnackBar(SnackBar(
+                            content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded} файлов'),
+                          ));
+                        },
+                        icon: lib.scanning
+                            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.refresh_rounded),
+                        label: Text(lib.scanning ? 'Сканирую...' : 'Сканировать'),
+                      ),
+                      TextButton(
+                        onPressed: () => ref.read(pageProvider.notifier).state = 4,
+                        child: const Text('Настройки'),
+                      ),
+                    ]),
+                  ],
+                ),
               ),
-              const SizedBox(height: 20),
-              Wrap(spacing: 12, alignment: WrapAlignment.center, children: [
-                FilledButton.icon(
-                  onPressed: _openFiles,
-                  icon: const Icon(Icons.folder_open_rounded),
-                  label: const Text('Открыть файлы'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    if (lib.scanning) return;
-                    final messenger = ScaffoldMessenger.of(context);
-                    await lib.scan();
-                    messenger.showSnackBar(SnackBar(
-                      content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded} файлов'),
-                    ));
-                  },
-                  icon: lib.scanning
-                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.refresh_rounded),
-                  label: Text(lib.scanning ? 'Сканирую...' : 'Сканировать'),
-                ),
-                TextButton(
-                  onPressed: () => ref.read(pageProvider.notifier).state = 4, // Настройки (было 5, теперь 4 — см. app_shell)
-                  child: const Text('Настройки'),
-                ),
-              ]),
-            ],
+            ),
           ),
-        ),
+        ],
       );
     }
 
@@ -181,83 +181,110 @@ class _AudioPageState extends ConsumerState<AudioPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Панель управления — без дублирования кнопок
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  onChanged: (v) => setState(() => _query = v),
-                  decoration: const InputDecoration(
-                    hintText: 'Поиск по трекам, исполнителям…',
-                    prefixIcon: Icon(Icons.search, size: 18),
-                    isDense: true,
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        onChanged: (v) => setState(() => _query = v),
+                        decoration: const InputDecoration(
+                          hintText: 'Поиск по трекам, исполнителям…',
+                          prefixIcon: Icon(Icons.search, size: 18),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    DropdownButton<String>(
+                      value: _sort,
+                      underline: const SizedBox.shrink(),
+                      borderRadius: BorderRadius.circular(12),
+                      items: const [
+                        DropdownMenuItem(value: 'title', child: Text('По названию')),
+                        DropdownMenuItem(value: 'artist', child: Text('По исполнителю')),
+                        DropdownMenuItem(value: 'date', child: Text('По дате')),
+                        DropdownMenuItem(value: 'duration', child: Text('По длительности')),
+                      ],
+                      onChanged: (v) => setState(() => _sort = v ?? 'title'),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: 'Открыть файлы',
+                      onPressed: _openFiles,
+                      icon: const Icon(Icons.add_rounded),
+                    ),
+                    IconButton(
+                      tooltip: 'Сканировать',
+                      onPressed: lib.scanning
+                          ? null
+                          : () async {
+                              final m = ScaffoldMessenger.of(context);
+                              await lib.scan();
+                              m.showSnackBar(SnackBar(content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded}')));
+                            },
+                      icon: lib.scanning
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.refresh_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Text(
+                    '${list.length} ${_plural(list.length)} · ${fmtSize(list.fold<int>(0, (s, t) => s + t.sizeBytes))}',
+                    style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.55)),
                   ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              DropdownButton<String>(
-                value: _sort,
-                underline: const SizedBox.shrink(),
-                borderRadius: BorderRadius.circular(12),
-                items: const [
-                  DropdownMenuItem(value: 'title', child: Text('По названию')),
-                  DropdownMenuItem(value: 'artist', child: Text('По исполнителю')),
-                  DropdownMenuItem(value: 'date', child: Text('По дате')),
-                  DropdownMenuItem(value: 'duration', child: Text('По длительности')),
-                ],
-                onChanged: (v) => setState(() => _sort = v ?? 'title'),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: 'Открыть файлы',
-                onPressed: _openFiles,
-                icon: const Icon(Icons.add_rounded),
-              ),
-              IconButton(
-                tooltip: 'Сканировать',
-                onPressed: lib.scanning ? null : () async {
-                  final m = ScaffoldMessenger.of(context);
-                  await lib.scan();
-                  m.showSnackBar(SnackBar(content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded}'))); 
-                },
-                icon: lib.scanning
-                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.refresh_rounded),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Text(
-              '${list.length} ${_plural(list.length)} · ${fmtSize(list.fold<int>(0, (s, t) => s + t.sizeBytes))}',
-              style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.55)),
+                const SizedBox(height: 4),
+                Expanded(
+                  child: list.isEmpty
+                      ? Center(
+                          child: Text('Ничего не найдено', style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.5))),
+                        )
+                      : ListView.builder(
+                          cacheExtent: 800,
+                          addAutomaticKeepAlives: false,
+                          addRepaintBoundaries: true,
+                          itemCount: list.length,
+                          itemBuilder: (context, i) {
+                            final t = list[i];
+                            final isCurrent = ref.watch(playerProvider.select((p) => p.current?.path)) == t.path;
+                            return RepaintBoundary(
+                              child: ListTile(
+                                leading: CoverArt(track: t, size: 48, radius: 10),
+                                title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: isCurrent ? TextStyle(color: accent, fontWeight: FontWeight.w600) : null),
+                                subtitle: Text([if (t.artist.isNotEmpty) t.artist, if (t.album.isNotEmpty) t.album].join(' · '), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+                                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                                  Text(fmtTime(Duration(milliseconds: t.durationMs)), style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.5))),
+                                  PopupMenuButton<String>(
+                                    onSelected: (v) async {
+                                      if (v == 'play') await ref.read(playerProvider).open(list, i);
+                                      if (v == 'queue') {
+                                        ref.read(playerProvider).enqueue([t]);
+                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Добавлено в очередь')));
+                                      }
+                                      if (v == 'playlist') _addToPlaylistDialog(t);
+                                      if (v == 'remove') lib.removeTrack(t);
+                                    },
+                                    itemBuilder: (_) => const [
+                                      PopupMenuItem(value: 'play', child: Text('Воспроизвести')),
+                                      PopupMenuItem(value: 'queue', child: Text('В очередь')),
+                                      PopupMenuItem(value: 'playlist', child: Text('В плейлист')),
+                                      PopupMenuItem(value: 'remove', child: Text('Удалить')),
+                                    ],
+                                  ),
+                                ]),
+                                onTap: () => ref.read(playerProvider).open(list, i),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 4),
-          Expanded(
-            child: list.isEmpty
-                ? Center(
-                    child: Text('Ничего не найдено', style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.5))),
-                  )
-                : ListView.builder(cacheExtent: 800, addAutomaticKeepAlives: false, addRepaintBoundaries: true, itemCount: list.length, itemBuilder: (context, i) {
-                      final t = list[i];
-                      final isCurrent = ref.watch(playerProvider.select((p) => p.current?.path)) == t.path;
-                      return RepaintBoundary(child: ListTile(
-                        leading: CoverArt(track: t, size: 48, radius: 10),
-                        title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: isCurrent ? TextStyle(color: accent, fontWeight: FontWeight.w600) : null),
-                        subtitle: Text([if (t.artist.isNotEmpty) t.artist, if (t.album.isNotEmpty) t.album].join(' · '), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
-                        trailing: Row(mainAxisSize: MainAxisSize.min, children: [Text(fmtTime(Duration(milliseconds: t.durationMs)), style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.5))), PopupMenuButton<String>(onSelected: (v) async { if (v == 'play') await ref.read(playerProvider).open(list, i); if (v == 'queue') { ref.read(playerProvider).enqueue([t]); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Добавлено в очередь'))); } if (v == 'playlist') _addToPlaylistDialog(t); if (v == 'remove') lib.removeTrack(t); }, itemBuilder: (_) => const [PopupMenuItem(value: 'play', child: Text('Воспроизвести')), PopupMenuItem(value: 'queue', child: Text('В очередь')), PopupMenuItem(value: 'playlist', child: Text('В плейлист')), PopupMenuItem(value: 'remove', child: Text('Удалить'))])]),
-                        onTap: () => ref.read(playerProvider).open(list, i),
-                      ));
-                    },
-                  ),
-          ),
-        ],
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -277,10 +304,18 @@ class _AudioPageState extends ConsumerState<AudioPage> {
     }
     final sorted = List.of(list);
     switch (_sort) {
-      case 'title': sorted.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase())); break;
-      case 'artist': sorted.sort((a, b) => (a.artist.isEmpty ? 'яяя' : a.artist.toLowerCase()).compareTo(b.artist.isEmpty ? 'яяя' : b.artist.toLowerCase())); break;
-      case 'date': sorted.sort((a, b) => b.addedAt.compareTo(a.addedAt)); break;
-      case 'duration': sorted.sort((a, b) => b.durationMs.compareTo(a.durationMs)); break;
+      case 'title':
+        sorted.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+        break;
+      case 'artist':
+        sorted.sort((a, b) => (a.artist.isEmpty ? 'яяя' : a.artist.toLowerCase()).compareTo(b.artist.isEmpty ? 'яяя' : b.artist.toLowerCase()));
+        break;
+      case 'date':
+        sorted.sort((a, b) => b.addedAt.compareTo(a.addedAt));
+        break;
+      case 'duration':
+        sorted.sort((a, b) => b.durationMs.compareTo(a.durationMs));
+        break;
     }
     return sorted;
   }
@@ -343,7 +378,6 @@ class _NowPlaying extends StatelessWidget {
     final theme = Theme.of(context);
     final accent = theme.colorScheme.primary;
     final t = player.current!;
-    // оптимизация: визуализатор в RepaintBoundary, LiveSeekBar через поток
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -355,7 +389,6 @@ class _NowPlaying extends StatelessWidget {
             children: [
               Center(child: ClipRRect(borderRadius: BorderRadius.circular(24), child: CoverArt(track: t, size: 280, radius: 24))),
               const SizedBox(height: 20),
-              // Кнопка назад к списку
               if (onShowLibrary != null)
                 Center(
                   child: OutlinedButton.icon(
@@ -400,34 +433,61 @@ class _LyricsView extends ConsumerStatefulWidget {
   @override
   ConsumerState<_LyricsView> createState() => _LyricsViewState();
 }
+
 class _LyricsViewState extends ConsumerState<_LyricsView> {
   final ScrollController _scroll = ScrollController();
   int _lastIndex = -1;
   @override
-  void dispose() { _scroll.dispose(); super.dispose(); }
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
   void _maybeScroll(int index) {
     if (index == _lastIndex || !_scroll.hasClients) return;
     _lastIndex = index;
-    if (index < 0) { _scroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut); return; }
+    if (index < 0) {
+      _scroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+      return;
+    }
     final target = (index * 40.0 - 80).clamp(0.0, _scroll.position.maxScrollExtent);
     _scroll.animateTo(target, duration: const Duration(milliseconds: 320), curve: Curves.easeOut);
   }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final accent = theme.colorScheme.primary;
     final lyrics = widget.player.lyrics;
     if (lyrics == null) return Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lyrics_outlined, size: 44, color: accent), const SizedBox(height: 12), Text('Текста нет', style: theme.textTheme.titleMedium), const SizedBox(height: 8), Text('Положи файл .lrc с тем же именем рядом\nс аудиофайлом — AURA покажет текст в такт.', textAlign: TextAlign.center, style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.55)))])));
-    return StreamBuilder<Duration>(stream: widget.player.positionStream, builder: (context, snap) {
-      final index = lyrics.indexAt(snap.data ?? Duration.zero);
-      _maybeScroll(index);
-      return ListView.builder(controller: _scroll, padding: const EdgeInsets.symmetric(vertical: 80, horizontal: 24), itemCount: lyrics.lines.length, itemBuilder: (context, i) {
-        final active = i == index;
-        return SizedBox(height: 40, child: Center(child: AnimatedDefaultTextStyle(duration: const Duration(milliseconds: 250), style: TextStyle(fontSize: active ? 17 : 14.5, fontWeight: active ? FontWeight.w700 : FontWeight.w400, color: active ? accent : theme.colorScheme.onSurface.withOpacity(0.5)), child: Text(lyrics.lines[i].text, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis))));
-      });
-    });
+    return StreamBuilder<Duration>(
+      stream: widget.player.positionStream,
+      builder: (context, snap) {
+        final index = lyrics.indexAt(snap.data ?? Duration.zero);
+        _maybeScroll(index);
+        return ListView.builder(
+          controller: _scroll,
+          padding: const EdgeInsets.symmetric(vertical: 80, horizontal: 24),
+          itemCount: lyrics.lines.length,
+          itemBuilder: (context, i) {
+            final active = i == index;
+            return SizedBox(
+              height: 40,
+              child: Center(
+                child: AnimatedDefaultTextStyle(
+                  duration: const Duration(milliseconds: 250),
+                  style: TextStyle(fontSize: active ? 17 : 14.5, fontWeight: active ? FontWeight.w700 : FontWeight.w400, color: active ? accent : theme.colorScheme.onSurface.withOpacity(0.5)),
+                  child: Text(lyrics.lines[i].text, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 }
+
 class _QueueView extends StatelessWidget {
   final PlayerController player;
   const _QueueView({required this.player});
@@ -435,22 +495,51 @@ class _QueueView extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final accent = theme.colorScheme.primary;
-    return Column(children: [Padding(padding: const EdgeInsets.fromLTRB(16, 10, 8, 4), child: Row(children: [Text('Очередь · ${player.queue.length}', style: theme.textTheme.titleMedium), const Spacer(), IconButton(tooltip: 'Перемешать (S)', onPressed: player.toggleShuffle, icon: Icon(Icons.shuffle_rounded, size: 18, color: player.shuffle ? accent : theme.colorScheme.onSurface.withOpacity(0.5))), IconButton(tooltip: 'Повтор (L)', onPressed: player.cycleRepeat, icon: Icon(Icons.repeat_rounded, size: 18, color: player.repeat == RepeatMode.off ? theme.colorScheme.onSurface.withOpacity(0.5) : accent))])), Expanded(child: ReorderableListView.builder(buildDefaultDragHandles: false, padding: const EdgeInsets.only(bottom: 12), itemCount: player.queue.length, onReorder: player.reorderQueue, itemBuilder: (context, i) {
-      final t = player.queue[i];
-      final isCurrent = i == player.index;
-      return ReorderableDragStartListener(key: ValueKey(t.path + i.toString()), index: i, child: ListTile(dense: true, leading: Text(isCurrent ? '▶' : '${i + 1}', style: TextStyle(color: isCurrent ? accent : null, fontWeight: FontWeight.bold)), title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: isCurrent ? TextStyle(color: accent, fontWeight: FontWeight.w600) : null), subtitle: Text(t.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)), trailing: IconButton(icon: const Icon(Icons.close_rounded, size: 18), onPressed: () => player.removeFromQueue(i)), onTap: () => player.playAt(i)));
-    }))]);
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 8, 4),
+        child: Row(children: [
+          Text('Очередь · ${player.queue.length}', style: theme.textTheme.titleMedium),
+          const Spacer(),
+          IconButton(tooltip: 'Перемешать (S)', onPressed: player.toggleShuffle, icon: Icon(Icons.shuffle_rounded, size: 18, color: player.shuffle ? accent : theme.colorScheme.onSurface.withOpacity(0.5))),
+          IconButton(tooltip: 'Повтор (L)', onPressed: player.cycleRepeat, icon: Icon(Icons.repeat_rounded, size: 18, color: player.repeat == RepeatMode.off ? theme.colorScheme.onSurface.withOpacity(0.5) : accent)),
+        ]),
+      ),
+      Expanded(
+        child: ReorderableListView.builder(
+          buildDefaultDragHandles: false,
+          padding: const EdgeInsets.only(bottom: 12),
+          itemCount: player.queue.length,
+          onReorder: player.reorderQueue,
+          itemBuilder: (context, i) {
+            final t = player.queue[i];
+            final isCurrent = i == player.index;
+            return ReorderableDragStartListener(
+              key: ValueKey(t.path + i.toString()),
+              index: i,
+              child: ListTile(
+                dense: true,
+                leading: Text(isCurrent ? '▶' : '${i + 1}', style: TextStyle(color: isCurrent ? accent : null, fontWeight: FontWeight.bold)),
+                title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: isCurrent ? TextStyle(color: accent, fontWeight: FontWeight.w600) : null),
+                subtitle: Text(t.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+                trailing: IconButton(icon: const Icon(Icons.close_rounded, size: 18), onPressed: () => player.removeFromQueue(i)),
+                onTap: () => player.playAt(i),
+              ),
+            );
+          },
+        ),
+      ),
+    ]);
   }
 }
 
-// Оптимизированные контролы — только нужные селекты перестраиваются
 class _AudioMainControls extends ConsumerWidget {
   const _AudioMainControls();
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final shuffle = ref.watch(playerProvider.select((p)=>p.shuffle));
-    final repeat = ref.watch(playerProvider.select((p)=>p.repeat));
-    final isPlaying = ref.watch(playerProvider.select((p)=>p.isPlaying));
+    final shuffle = ref.watch(playerProvider.select((p) => p.shuffle));
+    final repeat = ref.watch(playerProvider.select((p) => p.repeat));
+    final isPlaying = ref.watch(playerProvider.select((p) => p.isPlaying));
     final player = ref.read(playerProvider);
     final theme = Theme.of(context);
     final accent = theme.colorScheme.primary;
@@ -470,9 +559,9 @@ class _AudioRateVolumeRow extends ConsumerWidget {
   const _AudioRateVolumeRow();
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final rate = ref.watch(playerProvider.select((p)=>p.rate));
-    final muted = ref.watch(playerProvider.select((p)=>p.muted));
-    final volume = ref.watch(playerProvider.select((p)=>p.volume));
+    final rate = ref.watch(playerProvider.select((p) => p.rate));
+    final muted = ref.watch(playerProvider.select((p) => p.muted));
+    final volume = ref.watch(playerProvider.select((p) => p.volume));
     final player = ref.read(playerProvider);
     final theme = Theme.of(context);
     return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
