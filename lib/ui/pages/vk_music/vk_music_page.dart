@@ -10,6 +10,7 @@ import '../../../services/vk_music/vk_token_storage.dart';
 import '../../../services/library.dart';
 import '../../../models/models.dart';
 import '../../../state/player_controller.dart';
+import 'vk_id_auth_page.dart';
 
 final sharedPrefsProvider = Provider<SharedPreferences>((ref) => throw UnimplementedError('sharedPrefsProvider not overridden in main'));
 
@@ -148,7 +149,7 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
     final prefs = ref.watch(sharedPrefsProvider);
     final storage = VkTokenStorage(prefs);
     if (!storage.isAuthorized) {
-      return _LoginView(onLogin: () => setState(() {}));
+      return VkIdAuthPage(onSuccess: () => setState(() {}));
     }
     final theme = Theme.of(context);
     return Column(children: [
