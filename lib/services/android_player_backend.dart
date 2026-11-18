@@ -232,12 +232,10 @@ class AndroidPlayerBackend {
     Duration t = d;
     if (t < Duration.zero) t = Duration.zero;
     if (_duration > Duration.zero && t > _duration) t = _duration;
-    // live — clamp к окну, как в Kotlin seekToDefaultPosition
-    if (_isLive && _duration == Duration.zero) {
-      await c.seekTo(t);
-    } else {
-      await c.seekTo(t);
-    }
+    // Не ждём native seek — как в Kotlin onSeekEnd (unawaited). Иначе UI виснет на 1с пока декодер ищет ключевой кадр 4K/HLS.
+    // Видео догонит звук само, буферизация покажется через bufferingStream.
+    // ignore: discarded_futures
+    c.seekTo(t).catchError((_) {});
     _position = t;
     _positionCtrl.add(_position);
   }

@@ -187,7 +187,7 @@ class _VideoPageState extends ConsumerState<VideoPage> {
     return ColoredBox(
       color: Colors.black,
       child: Stack(fit: StackFit.expand, children: [
-        Positioned.fill(child: RepaintBoundary(child: ColoredBox(color: Colors.black, child: player.buildVideoView(fit: fit)))),
+        Positioned.fill(child: ColoredBox(color: Colors.black, child: player.buildVideoView(fit: fit))),
         // Твой Compose-оверлей — без белого, жесты под панелями
         Positioned.fill(
           child: PlayerGestureOverlay(
