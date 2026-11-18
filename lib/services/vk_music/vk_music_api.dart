@@ -65,43 +65,58 @@ class VkMusicApi {
 
   Future<List<VkTrack>> getMyAudio({int count = 50, int offset = 0}) async {
     final token = _storage.token;
-    if (token == null) throw Exception('Not authorized');
+    if (token == null) throw Exception('Not authorized — войди через VK ID');
     final uid = _storage.uid;
-    final uri = Uri.parse('$_api/audio.get').replace(queryParameters: {
-      'owner_id': '$uid', 'count': '$count', 'offset': '$offset', 'v': _v, 'access_token': token,
-    });
-    final r = await _http.get(uri, headers: {'User-Agent': _ua});
-    final j = jsonDecode(r.body) as Map<String, dynamic>;
-    final items = (j['response']?['items'] as List?) ?? [];
-    return items.map((e) => VkTrack.fromJson(e as Map<String, dynamic>)).toList();
+    return _callAudio('audio.get', {'owner_id': '$uid', 'count': '$count', 'offset': '$offset'}, token);
   }
 
   Future<String> _effectiveToken() async {
     final t = _storage.token;
     if (t != null && t.isNotEmpty) return t;
-    // L0: анонимный токен — поиск/популярное работают без логина
-    return await VkApi.getAnonymToken(client: _http);
+    // Поиск без логина невозможен для audio.* (VK отдаёт 28 на анонимный токен)
+    throw Exception('Войди в VK — поиск музыки требует авторизацию (VK закрыл audio для гостей)');
   }
 
   Future<List<VkTrack>> search(String q, {int count = 50}) async {
     final token = await _effectiveToken();
-    final uri = Uri.parse('$_api/audio.search').replace(queryParameters: {
-      'q': q, 'count': '$count', 'v': _v, 'access_token': token,
-    });
-    final r = await _http.get(uri, headers: {'User-Agent': _ua});
-    final j = jsonDecode(r.body) as Map<String, dynamic>;
-    final items = (j['response']?['items'] as List?) ?? [];
-    return items.map((e) => VkTrack.fromJson(e as Map<String, dynamic>)).toList();
+    return _callAudio('audio.search', {'q': q, 'count': '$count'}, token);
   }
 
   Future<List<VkTrack>> getPopular({int count = 50}) async {
     final token = await _effectiveToken();
-    final uri = Uri.parse('$_api/audio.getPopular').replace(queryParameters: {
-      'count': '$count', 'v': _v, 'access_token': token,
-    });
-    final r = await _http.get(uri, headers: {'User-Agent': _ua});
-    final j = jsonDecode(r.body) as Map<String, dynamic>;
-    final items = (j['response'] as List?) ?? [];
+    return _callAudio('audio.getPopular', {'count': '$count'}, token);
+  }
+
+  Future<List<VkTrack>> _callAudio(String method, Map<String, String> extra, String token) async {
+    Future<Map<String, dynamic>> doGet(String host) async {
+      final uri = Uri.parse('$host/method/$method').replace(queryParameters: {
+        ...extra,
+        'v': _v,
+        'access_token': token,
+      });
+      final r = await _http.get(uri, headers: {'User-Agent': _ua});
+      return jsonDecode(r.body) as Map<String, dynamic>;
+    }
+
+    var j = await doGet(_api);
+    // fallback на api.vk.ru (у некоторых методов другой хост)
+    if (j['error'] != null && (j['error']['error_code'] == 3 || j['error']['error_msg']?.toString().contains('Unknown method') == true)) {
+      final j2 = await doGet('https://api.vk.ru');
+      if (j2['error'] == null) j = j2;
+      else {
+        // VK сейчас режет audio.* для сторонних — отдаём понятный текст вместо "Unknown method passed"
+        final msg = j['error']['error_msg'] ?? 'Unknown method passed';
+        final code = j['error']['error_code'];
+        throw Exception('VK: $msg (code $code) — VK закрыл метод $method для этого токена. '
+            'Зайди через Kate Mobile токен или используй офлайн-библиотеку. '
+            'Попробуй вставить токен от официального клиента: Профиль → Настройки → Вставить токен вручную');
+      }
+    }
+    if (j['error'] != null) {
+      final e = j['error'];
+      throw Exception('VK ${e['error_code']}: ${e['error_msg']}');
+    }
+    final items = (j['response']?['items'] as List?) ?? (j['response'] as List?) ?? [];
     return items.map((e) => VkTrack.fromJson(e as Map<String, dynamic>)).toList();
   }
 }
