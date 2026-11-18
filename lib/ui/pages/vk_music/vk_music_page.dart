@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../../services/vk_music/vk_music_api.dart';
 import '../../../services/vk_music/vk_token_storage.dart';
 import '../../../services/library.dart';
+import '../../../services/settings.dart';
 import '../../../models/models.dart';
 import '../../../state/player_controller.dart';
 import '../vk_auth_page.dart';
@@ -84,26 +85,54 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
     }
   }
 
+  MediaTrack _toMedia(VkTrack t) => MediaTrack(
+        path: t.url!,
+        isVideo: false,
+        title: t.title,
+        artist: t.artist,
+        album: '',
+        durationMs: t.duration * 1000,
+        sizeBytes: 0,
+        addedAt: DateTime.now().millisecondsSinceEpoch,
+      );
+
   Future<void> _play(VkTrack t) async {
     if (t.url == null || t.url!.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ссылка пустая — возможно трек без URL (требует обновления токена)')));
       return;
     }
-    final track = MediaTrack(
-      path: t.url!,
-      isVideo: false,
-      title: t.title,
-      artist: t.artist,
-      album: '',
-      durationMs: t.duration * 1000,
-      sizeBytes: 0,
-      addedAt: DateTime.now().millisecondsSinceEpoch,
-    );
-    await ref.read(playerProvider.notifier).open([track], 0);
-    // автопереход не нужен — плеер внутри AudioPage покажет NowPlaying
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('▶ ${t.artist} — ${t.title}')));
+    // Собираем всю видимую очередь — чтобы плеер шёл дальше, а не стопорился на 1 треке
+    final playable = _tracks.where((e) => e.url != null && e.url!.isNotEmpty).toList();
+    if (playable.isEmpty) return;
+    final queue = playable.map(_toMedia).toList();
+    var start = playable.indexWhere((e) => e.url == t.url);
+    if (start < 0) start = 0;
+
+    final ctrl = ref.read(playerProvider.notifier);
+    // VK-плейлист должен идти по кругу по умолчанию (как в VK) — если off, ставим all
+    if (ctrl.repeat == RepeatMode.off) {
+      ctrl.repeat = RepeatMode.all;
+    }
+    await ctrl.open(queue, start);
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('▶ ${t.artist} — ${t.title} • ${playable.length} треков в очереди')));
   }
+
+  Future<void> _playAll({bool shuffle = false}) async {
+    final playable = _tracks.where((e) => e.url != null && e.url!.isNotEmpty).toList();
+    if (playable.isEmpty) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Нет треков с URL для воспроизведения')));
+      return;
+    }
+    final queue = playable.map(_toMedia).toList();
+    final ctrl = ref.read(playerProvider.notifier);
+    ctrl.repeat = RepeatMode.all;
+    if (shuffle && !ctrl.shuffle) ctrl.toggleShuffle();
+    if (!shuffle && ctrl.shuffle) ctrl.toggleShuffle();
+    await ctrl.open(queue, 0);
+  }
+
+  Future<void> _shufflePlay() => _playAll(shuffle: true);
 
   Future<void> _download(VkTrack t) async {
     if (t.url == null || t.url!.isEmpty) {
@@ -225,6 +254,27 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           child: Text(_error!, style: TextStyle(color: theme.colorScheme.error, fontSize: 12)),
+        ),
+      if (_tracks.isNotEmpty && !_loading)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          child: Row(children: [
+            Expanded(
+              child: FilledButton.icon(
+                icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                label: Text('Играть всё (${_tracks.length})', style: const TextStyle(fontSize: 13)),
+                onPressed: _playAll,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.shuffle_rounded, size: 18),
+                label: const Text('Перемешать', style: TextStyle(fontSize: 13)),
+                onPressed: _shufflePlay,
+              ),
+            ),
+          ]),
         ),
       Expanded(
         child: _loading
