@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:webview_flutter/webview_flutter.dart';
 import '../../services/vk/vk_lkmp_auth.dart';
 
 /// Вход по флоу LKMP (route_auth.xml + слайды auth_steep_*).
@@ -11,6 +12,8 @@ import '../../services/vk/vk_lkmp_auth.dart';
 ///  - «Отправить повторно» работает;
 ///  - выбор методов парсит response.methods[] (B_RunnableC0023l0.java:127);
 ///  - капча (error 14 / need_captcha) показывается и вводится, а не «блокирует»;
+///    картинка грузится с хедерами клиента, при пустой картинке/ошибке загрузки —
+///    смарт-капча VK ID (redirect_uri) в WebView с авто-ретраем после прохождения;
 ///  - checkOtp передаёт verification_method; при access_token в ответе сразу пост-логин;
 ///  - need_validation из oauth/token автоматически отправляет OTP нужным каналом.
 class VkLkmpAuthPage extends StatefulWidget {
@@ -37,6 +40,12 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
   List<VkLkmpVerificationMethod> _methods = [];
   String _currentMethod = '';
   String _currentInfo = '';
+  // Смарт-капча VK ID: success_token/captcha_key, перехваченные в WebView.
+  String _smartToken = '';
+  // Какой шаг повторить после прохождения капчи.
+  VoidCallback? _retryAfterCaptcha;
+  // Хедеры для загрузки captcha_img (кеш, чтобы Image не перезапрашивался).
+  Future<Map<String, String>>? _captchaHeadersFuture;
 
   @override
   void initState() {
@@ -59,7 +68,11 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
   void _clearCaptcha() {
     _captcha = null;
     _captchaCtrl.clear();
+    _smartToken = '';
   }
+
+  /// Ключ капчи: смарт-капча (success_token) приоритетнее кода с картинки.
+  String get _captchaKey => _smartToken.isNotEmpty ? _smartToken : _captchaCtrl.text.trim();
 
   String _short(Object o) {
     final s = o.toString();
@@ -70,7 +83,10 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
     setState(() {
       if (e.kind == 'captcha' && e.captcha != null) {
         _captcha = e.captcha;
-        _info = 'Введите код с картинки';
+        _smartToken = ''; // новая капча — прежний success_token больше не действует
+        _info = (e.captcha!.img.isNotEmpty)
+            ? 'Введите код с картинки'
+            : 'VK требует проверку «Я не робот» — нажмите кнопку под полем';
       } else if (e.kind == 'flood') {
         _info = 'Слишком много попыток. Подождите 2–3 минуты и попробуйте снова.';
       } else {
@@ -130,11 +146,12 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
       return;
     }
     setState(() => _loading = true);
+    _retryAfterCaptcha = _doLogin;
     try {
       final res = await _auth.validateAccount(
         phone: _loginCtrl.text.trim(),
         captcha: _captcha,
-        captchaKey: _captchaCtrl.text.trim(),
+        captchaKey: _captchaKey,
       );
       _clearCaptcha();
       final resp = res['response'];
@@ -193,6 +210,7 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
       return;
     }
     setState(() => _loading = true);
+    _retryAfterCaptcha = () => _chooseMethod(name, info);
     try {
       final otp = await _auth.sendOtp(channel: name);
       final r = otp['response'];
@@ -215,12 +233,13 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
       return;
     }
     setState(() => _loading = true);
+    _retryAfterCaptcha = _submitCode;
     try {
       final res = await _auth.checkOtp(
         code: _codeCtrl.text.trim(),
         verificationMethod: _currentMethod,
         captcha: _captcha,
-        captchaKey: _captchaCtrl.text.trim(),
+        captchaKey: _captchaKey,
       );
       _clearCaptcha();
       final resp = res['response'];
@@ -247,11 +266,12 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
       return;
     }
     setState(() => _loading = true);
+    _retryAfterCaptcha = _submitPassword;
     try {
       final r = await _auth.loginWithPassword(
         password: _passCtrl.text,
         captcha: _captcha,
-        captchaKey: _captchaCtrl.text.trim(),
+        captchaKey: _captchaKey,
       );
       _clearCaptcha();
       if (r.success) {
@@ -314,26 +334,115 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
   }
 
   Widget _captchaField() {
+    final c = _captcha!;
     return Column(
       children: [
-        if (_captcha != null && _captcha!.img.isNotEmpty)
-          Image.network(_captcha!.img, height: 60, fit: BoxFit.contain),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _captchaCtrl,
-          style: const TextStyle(color: Color(0xFFC8C8C8), fontSize: 16),
-          decoration: InputDecoration(
-            hintText: 'Код с картинки',
-            hintStyle: const TextStyle(color: Color(0xFFD5D5D5)),
-            filled: true,
-            fillColor: const Color(0xFF1F1F1F),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        if (c.img.isNotEmpty)
+          FutureBuilder<Map<String, String>>(
+            future: _captchaHeadersFuture ??= _auth.captchaImageHeaders(),
+            builder: (context, snap) {
+              if (snap.connectionState != ConnectionState.done) {
+                return const SizedBox(
+                    height: 60,
+                    child: Center(child: CircularProgressIndicator(strokeWidth: 2)));
+              }
+              return Image.network(
+                c.img,
+                height: 60,
+                fit: BoxFit.contain,
+                headers: snap.data,
+                errorBuilder: (_, __, ___) => _smartCaptchaButton(
+                    'Картинка капчи не загрузилась — пройдите проверку VK ID'),
+              );
+            },
+          )
+        else ...[
+          const Text('VK просит подтвердить, что вы не робот',
+              style: TextStyle(color: Color(0xFFC8C8C8), fontSize: 14),
+              textAlign: TextAlign.center),
+          const SizedBox(height: 8),
+          _smartCaptchaButton(''),
+        ],
+        if (c.img.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          TextField(
+            controller: _captchaCtrl,
+            style: const TextStyle(color: Color(0xFFC8C8C8), fontSize: 16),
+            decoration: InputDecoration(
+              hintText: 'Код с картинки',
+              hintStyle: const TextStyle(color: Color(0xFFD5D5D5)),
+              filled: true,
+              fillColor: const Color(0xFF1F1F1F),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            ),
+            keyboardType: TextInputType.number,
           ),
-          keyboardType: TextInputType.number,
+          const SizedBox(height: 8),
+          const Text(
+              'Картинка не грузится? Пройдите проверку VK ID — она заменяет ввод кода.',
+              style: TextStyle(color: Color(0xFF8A8A8A), fontSize: 12),
+              textAlign: TextAlign.center),
+          _smartCaptchaButton(''),
+        ],
+      ],
+    );
+  }
+
+  Widget _smartCaptchaButton(String note) {
+    return Column(
+      children: [
+        if (note.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(note,
+              style: const TextStyle(color: Color(0xFFFFB74D), fontSize: 12),
+              textAlign: TextAlign.center),
+        ],
+        const SizedBox(height: 4),
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0xFF0077FF)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: _loading ? null : _openSmartCaptcha,
+            child: const Text('Пройти проверку VK ID («Я не робот»)',
+                style: TextStyle(color: Color(0xFF0077FF), fontSize: 14)),
+          ),
         ),
       ],
     );
+  }
+
+  /// Смарт-капча VK ID: открываем redirect_uri в WebView. Страница по завершении
+  /// шлёт postMessage (vk-sak-sdk) с success_token/captcha_key — перехватываем,
+  /// возвращаемся и автоматически повторяем шаг, на котором пришла капча.
+  Future<void> _openSmartCaptcha() async {
+    final c = _captcha;
+    if (c == null || c.redirectUri.isEmpty) {
+      setState(() {
+        _info = 'Смарт-капча недоступна (нет ссылки). Повторите запрос — VK пришлёт капчу заново.';
+      });
+      return;
+    }
+    final token = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (_) => VkSmartCaptchaPage(url: c.redirectUri)),
+    );
+    if (!mounted) return;
+    if (token != null && token.isNotEmpty) {
+      setState(() {
+        _smartToken = token;
+        _info = 'Проверка пройдена — повторяем запрос…';
+      });
+      _retryAfterCaptcha?.call();
+    } else {
+      setState(() {
+        _info = 'Если проверка пройдена — просто нажмите «Далее»/«Подтвердить» ещё раз';
+      });
+    }
   }
 
   Widget _button({
@@ -481,5 +590,126 @@ class _VkLkmpAuthPageState extends State<VkLkmpAuthPage> {
     if (method == 'reserve_code') return 'Ввести резервный код';
     if (method == 'codegen') return 'Приложение для генерации кодов';
     return info.isNotEmpty ? '$method — $info' : method;
+  }
+}
+
+/// WebView со смарт-капчей VK ID (redirect_uri из ошибки 14 / need_captcha).
+/// Страница по завершении шлёт postMessage типа vk-sak-sdk с
+/// {captcha_sid, captcha_key, success_token} — перехватываем через JS-мост
+/// (или из URL) и возвращаем токен в форму авторизации.
+class VkSmartCaptchaPage extends StatefulWidget {
+  final String url;
+  const VkSmartCaptchaPage({super.key, required this.url});
+  @override
+  State<VkSmartCaptchaPage> createState() => _VkSmartCaptchaPageState();
+}
+
+class _VkSmartCaptchaPageState extends State<VkSmartCaptchaPage> {
+  String _captured = '';
+  String _status = 'Пройдите проверку, затем нажмите «Готово»';
+
+  /// Заворачиваем postMessage окна/родителя, чтобы получить результат капчи.
+  static const _hookJs = '''
+(function(){
+  if (window.__auraHook) return; window.__auraHook = 1;
+  var send = function(d){ try { AuraCaptcha.postMessage(typeof d === 'string' ? d : JSON.stringify(d)); } catch(e){} };
+  var wrap = function(w){ if(!w || w.__auraWrapped) return; try { w.__auraWrapped = 1; var o = w.postMessage.bind(w); w.postMessage = function(m,t){ send(m); return o(m,t); }; } catch(e){} };
+  try { wrap(window.parent); wrap(window); } catch(e){}
+  try { window.addEventListener('message', function(e){ send(e.data); }); } catch(e){}
+})();
+''';
+
+  late final WebViewController _controller = WebViewController()
+    ..setJavaScriptMode(JavaScriptMode.unrestricted)
+    ..addJavaScriptChannel('AuraCaptcha', onMessageReceived: _onMessage)
+    ..setNavigationDelegate(NavigationDelegate(
+      onPageFinished: (_) => _hookMessages(),
+      onNavigationRequest: (r) {
+        final t = _extractFromUrl(r.url);
+        if (t != null && t.isNotEmpty && t != _captured) {
+          _captured = t;
+          _status = 'Проверка пройдена — нажмите «Готово»';
+        }
+        return NavigationDecision.navigate;
+      },
+    ))
+    ..loadRequest(Uri.parse(widget.url));
+
+  void _hookMessages() {
+    try {
+      _controller.runJavaScript(_hookJs);
+    } catch (_) {}
+  }
+
+  void _onMessage(JavaScriptMessage m) {
+    final t = _extractFromText(m.message);
+    if (t == null || t.isEmpty || t == _captured) return;
+    setState(() {
+      _captured = t;
+      _status = 'Проверка пройдена — нажмите «Готово»';
+    });
+  }
+
+  String? _extractFromText(String s) {
+    for (final pat in [
+      RegExp(r'"success_token"\s*:\s*"([^"]+)"'),
+      RegExp(r'"captcha_key"\s*:\s*"([^"]+)"'),
+    ]) {
+      final m = pat.firstMatch(s);
+      final v = m?.group(1);
+      if (v != null && v.isNotEmpty && v != 'success') return v;
+    }
+    return null;
+  }
+
+  String? _extractFromUrl(String url) {
+    try {
+      final u = Uri.parse(url);
+      for (final k in const ['success_token', 'captcha_key']) {
+        final q = u.queryParameters[k];
+        if (q != null && q.isNotEmpty) return q;
+        final f = u.fragment.isNotEmpty ? _frag(u.fragment, k) : null;
+        if (f != null && f.isNotEmpty) return f;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  String? _frag(String frag, String key) {
+    for (final p in frag.split('&')) {
+      final i = p.indexOf('=');
+      if (i > 0 && p.substring(0, i) == key) return Uri.decodeComponent(p.substring(i + 1));
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF131313),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF131313),
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: const Text('Подтверждение VK ID', style: TextStyle(color: Colors.white)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, _captured),
+            child: const Text('Готово',
+                style: TextStyle(color: Color(0xFF0077FF), fontSize: 16)),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(child: WebViewWidget(controller: _controller)),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(_status,
+                style: const TextStyle(color: Color(0xFFC8C8C8), fontSize: 13),
+                textAlign: TextAlign.center),
+          ),
+        ],
+      ),
+    );
   }
 }
