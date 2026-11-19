@@ -12,6 +12,7 @@ import '../../../services/settings.dart';
 import '../../../models/models.dart';
 import '../../../state/player_controller.dart';
 import 'vk_webview_page.dart';
+import 'vk_id_auth_page.dart';
 import '../vk_auth_page.dart';
 
 final sharedPrefsProvider = Provider<SharedPreferences>((ref) => throw UnimplementedError('sharedPrefsProvider not overridden in main'));
@@ -181,7 +182,7 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
     final isAuth = storage.isAuthorized;
     final theme = Theme.of(context);
 
-    // Успешный способ — копия blank.html с кодом (как в архиве 70c76b93)
+    // Успешный способ — ИД ВК Музыка (телефон→код→пароль→silent_token→moosic), как в архиве 70c76b93
     if (!isAuth && _tab.index == 0) {
       return Column(
         children: [
@@ -193,7 +194,7 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
             },
             tabs: const [Tab(text: 'Моя'), Tab(text: 'Популярное'), Tab(text: 'Поиск')],
           ),
-          Expanded(child: _ManualVkLogin(onSuccess: () => setState(() {}))),
+          Expanded(child: VkIdAuthPage(onSuccess: () => setState(() {}))),
         ],
       );
     }
