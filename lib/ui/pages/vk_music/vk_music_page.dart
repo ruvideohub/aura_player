@@ -182,7 +182,7 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
     final isAuth = storage.isAuthorized;
     final theme = Theme.of(context);
 
-    // Успешный способ — ИД ВК Музыка (телефон→код→пароль→silent_token→moosic), как в архиве 70c76b93
+    // Основной — blank.html 6767438 через WebView с авто-ловлей токена
     if (!isAuth && _tab.index == 0) {
       return Column(
         children: [
@@ -194,7 +194,7 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
             },
             tabs: const [Tab(text: 'Моя'), Tab(text: 'Популярное'), Tab(text: 'Поиск')],
           ),
-          Expanded(child: VkIdAuthPage(onSuccess: () => setState(() {}))),
+          Expanded(child: _ManualVkLogin(onSuccess: () => setState(() {}))),
         ],
       );
     }
@@ -322,7 +322,7 @@ class _VkMusicPageState extends ConsumerState<VkMusicPage> with SingleTickerProv
   }
 }
 
-/// Ручной вход VK ID как в успешном архиве: браузер → blank.html → вставка ссылки
+/// Ручной вход blank.html 6767438 — основной, с WebView который сам копирует токен когда откроется blank
 class _ManualVkLogin extends ConsumerStatefulWidget {
   final VoidCallback onSuccess;
   const _ManualVkLogin({required this.onSuccess});
@@ -340,6 +340,19 @@ class _ManualVkLoginState extends ConsumerState<_ManualVkLogin> {
     super.dispose();
   }
 
+  void _openWebView() {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => VkBlankWebView(
+        alt: _alt,
+        onSuccess: () {
+          // после возврата — обновить isAuth
+          widget.onSuccess();
+          if (mounted) setState(() {});
+        },
+      ),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -350,15 +363,21 @@ class _ManualVkLoginState extends ConsumerState<_ManualVkLogin> {
         const SizedBox(height: 12),
         const Text('VK Музыка — вход', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        const Text('Откроется сайт VK — войди телефон → код → пароль, нажми Разрешить, скопируй ссылку из адресной строки и вставь сюда.\nЭто чистый implicit flow без баноопасных хаков.', textAlign: TextAlign.center, style: TextStyle(fontSize: 12)),
+        const Text(
+          'Нажми «Открыть VK» — войди телефон → код → пароль, нажми Разрешить.\nТокен из blank.html поймается автоматически, ничего копировать не нужно.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 12),
+        ),
         const SizedBox(height: 16),
         FilledButton.icon(
-          onPressed: () => VkWebViewHelper.openBrowser(alt: _alt),
+          onPressed: _openWebView,
           icon: const Icon(Icons.open_in_browser_rounded),
-          label: Text(_alt ? 'Открыть VK (6121396)' : 'Открыть сайт VK (6287487) ✓'),
+          label: Text(_alt ? 'Открыть VK (6121396)' : 'Открыть VK (6767438) ✓'),
         ),
-        TextButton(onPressed: () => setState(() => _alt = !_alt), child: Text(_alt ? 'На 6287487' : 'Попробовать 6121396')),
+        TextButton(onPressed: () => setState(() => _alt = !_alt), child: Text(_alt ? 'На 6767438' : 'Попробовать 6121396')),
         const Divider(),
+        const Text('Не сработало? Вставь ссылку вручную:', style: TextStyle(fontSize: 11)),
+        const SizedBox(height: 6),
         TextField(
           controller: _ctrl,
           maxLines: 3,
@@ -382,18 +401,30 @@ class _ManualVkLoginState extends ConsumerState<_ManualVkLogin> {
             await prefs.setString('vk_music_token', token);
             if (uid != 0) await prefs.setInt('vk_music_uid', uid);
             widget.onSuccess();
-            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('VK токен сохранён')));
+            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('VK токен сохранён'))); 
           },
-          child: const Text('Сохранить'),
+          child: const Text('Сохранить вручную'),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
+          onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('VK ID — телефон → код')),
+                    body: VkIdAuthPage(onSuccess: () {
+                      Navigator.of(context).pop();
+                      widget.onSuccess();
+                    }),
+                  ))),
+          icon: const Icon(Icons.phone_iphone_rounded),
+          label: const Text('Вход по телефону (резерв)'),
+        ),
+        const SizedBox(height: 6),
+        OutlinedButton.icon(
           onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => Scaffold(appBar: AppBar(title: const Text('Авто VK ID')), body: VkAuthPage(onSuccess: () { Navigator.of(context).pop(); widget.onSuccess(); })))),
           icon: const Icon(Icons.auto_awesome),
-          label: const Text('Попробовать авто WebView (PKCE)'),
+          label: const Text('Авто WebView PKCE (резерв)'),
         ),
       ]),
     );
   }
 }
-
