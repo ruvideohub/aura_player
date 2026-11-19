@@ -155,3 +155,7 @@ class SettingsController extends ChangeNotifier {
 final settingsProvider = ChangeNotifierProvider<SettingsController>((ref) {
   throw UnimplementedError('settingsProvider переопределяется в main()');
 });
+
+final sharedPrefsProvider = Provider<SharedPreferences>((ref) {
+  throw UnimplementedError('sharedPrefsProvider not overridden in main');
+});

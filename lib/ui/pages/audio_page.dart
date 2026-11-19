@@ -13,7 +13,6 @@ import '../state/ui_state.dart';
 import '../widgets/cover_art.dart';
 import '../widgets/seekbar.dart';
 import '../widgets/visualizer.dart';
-import 'vk_music/vk_music_page.dart';
 
 class AudioPage extends ConsumerStatefulWidget {
   const AudioPage({super.key});
@@ -22,13 +21,10 @@ class AudioPage extends ConsumerStatefulWidget {
   ConsumerState<AudioPage> createState() => _AudioPageState();
 }
 
-enum _AudioSource { offline, vk }
-
 class _AudioPageState extends ConsumerState<AudioPage> {
   String _query = '';
   String _sort = 'title';
   bool _showLibrary = false;
-  _AudioSource _source = _AudioSource.offline;
 
   @override
   Widget build(BuildContext context) {
@@ -84,207 +80,164 @@ class _AudioPageState extends ConsumerState<AudioPage> {
     return _audioLibrary(context, lib, player, theme);
   }
 
-  Widget _sourceToggle(ThemeData theme) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      child: Center(
-        child: SegmentedButton<_AudioSource>(
-          segments: const [
-            ButtonSegment(value: _AudioSource.offline, label: Text('Офлайн'), icon: Icon(Icons.folder_rounded, size: 16)),
-            ButtonSegment(value: _AudioSource.vk, label: Text('VK Музыка'), icon: Icon(Icons.cloud_rounded, size: 16)),
-          ],
-          selected: {_source},
-          onSelectionChanged: (s) => setState(() => _source = s.first),
-          showSelectedIcon: false,
-          style: ButtonStyle(visualDensity: VisualDensity.compact),
-        ),
-      ),
-    );
-  }
-
   Widget _audioLibrary(BuildContext context, LibraryController lib, PlayerController player, ThemeData theme) {
-    if (_source == _AudioSource.vk) {
-      return Column(
-        children: [
-          _sourceToggle(theme),
-          const Divider(height: 1),
-          const Expanded(child: VkMusicPage()),
-        ],
-      );
-    }
-
     final accent = theme.colorScheme.primary;
     final list = _filtered(lib);
 
     if (lib.audio.isEmpty && list.isEmpty && _query.isEmpty) {
-      return Column(
-        children: [
-          _sourceToggle(theme),
-          Expanded(
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.music_note_rounded, size: 72, color: accent),
-                    const SizedBox(height: 16),
-                    Text('Нет музыки', style: theme.textTheme.titleLarge),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Сканирование ещё не выполнено.\nОткрой файлы или запусти скан в Настройках.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.6)),
-                    ),
-                    const SizedBox(height: 20),
-                    Wrap(spacing: 12, alignment: WrapAlignment.center, children: [
-                      FilledButton.icon(
-                        onPressed: _openFiles,
-                        icon: const Icon(Icons.folder_open_rounded),
-                        label: const Text('Открыть файлы'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: () async {
-                          if (lib.scanning) return;
-                          final messenger = ScaffoldMessenger.of(context);
-                          await lib.scan();
-                          messenger.showSnackBar(SnackBar(
-                            content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded} файлов'),
-                          ));
-                        },
-                        icon: lib.scanning
-                            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                            : const Icon(Icons.refresh_rounded),
-                        label: Text(lib.scanning ? 'Сканирую...' : 'Сканировать'),
-                      ),
-                      TextButton(
-                        onPressed: () => ref.read(pageProvider.notifier).state = 4,
-                        child: const Text('Настройки'),
-                      ),
-                    ]),
-                  ],
-                ),
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.music_note_rounded, size: 72, color: accent),
+              const SizedBox(height: 16),
+              Text('Нет музыки', style: theme.textTheme.titleLarge),
+              const SizedBox(height: 8),
+              Text(
+                'Сканирование ещё не выполнено.\nОткрой файлы или запусти скан в Настройках.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.6)),
               ),
-            ),
+              const SizedBox(height: 20),
+              Wrap(spacing: 12, alignment: WrapAlignment.center, children: [
+                FilledButton.icon(
+                  onPressed: _openFiles,
+                  icon: const Icon(Icons.folder_open_rounded),
+                  label: const Text('Открыть файлы'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    if (lib.scanning) return;
+                    final messenger = ScaffoldMessenger.of(context);
+                    await lib.scan();
+                    messenger.showSnackBar(SnackBar(
+                      content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded} файлов'),
+                    ));
+                  },
+                  icon: lib.scanning
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.refresh_rounded),
+                  label: Text(lib.scanning ? 'Сканирую...' : 'Сканировать'),
+                ),
+                TextButton(
+                  onPressed: () => ref.read(pageProvider.notifier).state = 4,
+                  child: const Text('Настройки'),
+                ),
+              ]),
+            ],
           ),
-        ],
+        ),
       );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _sourceToggle(theme),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        onChanged: (v) => setState(() => _query = v),
-                        decoration: const InputDecoration(
-                          hintText: 'Поиск по трекам, исполнителям…',
-                          prefixIcon: Icon(Icons.search, size: 18),
-                          isDense: true,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    DropdownButton<String>(
-                      value: _sort,
-                      underline: const SizedBox.shrink(),
-                      borderRadius: BorderRadius.circular(12),
-                      items: const [
-                        DropdownMenuItem(value: 'title', child: Text('По названию')),
-                        DropdownMenuItem(value: 'artist', child: Text('По исполнителю')),
-                        DropdownMenuItem(value: 'date', child: Text('По дате')),
-                        DropdownMenuItem(value: 'duration', child: Text('По длительности')),
-                      ],
-                      onChanged: (v) => setState(() => _sort = v ?? 'title'),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      tooltip: 'Открыть файлы',
-                      onPressed: _openFiles,
-                      icon: const Icon(Icons.add_rounded),
-                    ),
-                    IconButton(
-                      tooltip: 'Сканировать',
-                      onPressed: lib.scanning
-                          ? null
-                          : () async {
-                              final m = ScaffoldMessenger.of(context);
-                              await lib.scan();
-                              m.showSnackBar(SnackBar(content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded}')));
-                            },
-                      icon: lib.scanning
-                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.refresh_rounded),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Text(
-                    '${list.length} ${_plural(list.length)} · ${fmtSize(list.fold<int>(0, (s, t) => s + t.sizeBytes))}',
-                    style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.55)),
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  onChanged: (v) => setState(() => _query = v),
+                  decoration: const InputDecoration(
+                    hintText: 'Поиск по трекам, исполнителям…',
+                    prefixIcon: Icon(Icons.search, size: 18),
+                    isDense: true,
                   ),
                 ),
-                const SizedBox(height: 4),
-                Expanded(
-                  child: list.isEmpty
-                      ? Center(
-                          child: Text('Ничего не найдено', style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.5))),
-                        )
-                      : ListView.builder(
-                          cacheExtent: 800,
-                          addAutomaticKeepAlives: false,
-                          addRepaintBoundaries: true,
-                          itemCount: list.length,
-                          itemBuilder: (context, i) {
-                            final t = list[i];
-                            final isCurrent = ref.watch(playerProvider.select((p) => p.current?.path)) == t.path;
-                            return RepaintBoundary(
-                              child: ListTile(
-                                leading: CoverArt(track: t, size: 48, radius: 10),
-                                title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: isCurrent ? TextStyle(color: accent, fontWeight: FontWeight.w600) : null),
-                                subtitle: Text([if (t.artist.isNotEmpty) t.artist, if (t.album.isNotEmpty) t.album].join(' · '), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
-                                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                                  Text(fmtTime(Duration(milliseconds: t.durationMs)), style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.5))),
-                                  PopupMenuButton<String>(
-                                    onSelected: (v) async {
-                                      if (v == 'play') await ref.read(playerProvider).open(list, i);
-                                      if (v == 'queue') {
-                                        ref.read(playerProvider).enqueue([t]);
-                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Добавлено в очередь')));
-                                      }
-                                      if (v == 'playlist') _addToPlaylistDialog(t);
-                                      if (v == 'remove') lib.removeTrack(t);
-                                    },
-                                    itemBuilder: (_) => const [
-                                      PopupMenuItem(value: 'play', child: Text('Воспроизвести')),
-                                      PopupMenuItem(value: 'queue', child: Text('В очередь')),
-                                      PopupMenuItem(value: 'playlist', child: Text('В плейлист')),
-                                      PopupMenuItem(value: 'remove', child: Text('Удалить')),
-                                    ],
-                                  ),
-                                ]),
-                                onTap: () => ref.read(playerProvider).open(list, i),
-                              ),
-                            );
-                          },
-                        ),
-                ),
-              ],
+              ),
+              const SizedBox(width: 12),
+              DropdownButton<String>(
+                value: _sort,
+                underline: const SizedBox.shrink(),
+                borderRadius: BorderRadius.circular(12),
+                items: const [
+                  DropdownMenuItem(value: 'title', child: Text('По названию')),
+                  DropdownMenuItem(value: 'artist', child: Text('По исполнителю')),
+                  DropdownMenuItem(value: 'date', child: Text('По дате')),
+                  DropdownMenuItem(value: 'duration', child: Text('По длительности')),
+                ],
+                onChanged: (v) => setState(() => _sort = v ?? 'title'),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: 'Открыть файлы',
+                onPressed: _openFiles,
+                icon: const Icon(Icons.add_rounded),
+              ),
+              IconButton(
+                tooltip: 'Сканировать',
+                onPressed: lib.scanning
+                    ? null
+                    : () async {
+                        final m = ScaffoldMessenger.of(context);
+                        await lib.scan();
+                        m.showSnackBar(SnackBar(content: Text(lib.lastScanError != null ? 'Ошибка: ${lib.lastScanError}' : 'Добавлено ${lib.lastScanAdded}')));
+                      },
+                icon: lib.scanning
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.refresh_rounded),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              '${list.length} ${_plural(list.length)} · ${fmtSize(list.fold<int>(0, (s, t) => s + t.sizeBytes))}',
+              style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.55)),
             ),
           ),
-        ),
-      ],
+          const SizedBox(height: 4),
+          Expanded(
+            child: list.isEmpty
+                ? Center(
+                    child: Text('Ничего не найдено', style: TextStyle(color: theme.colorScheme.onSurface.withOpacity(0.5))),
+                  )
+                : ListView.builder(
+                    cacheExtent: 800,
+                    addAutomaticKeepAlives: false,
+                    addRepaintBoundaries: true,
+                    itemCount: list.length,
+                    itemBuilder: (context, i) {
+                      final t = list[i];
+                      final isCurrent = ref.watch(playerProvider.select((p) => p.current?.path)) == t.path;
+                      return RepaintBoundary(
+                        child: ListTile(
+                          leading: CoverArt(track: t, size: 48, radius: 10),
+                          title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: isCurrent ? TextStyle(color: accent, fontWeight: FontWeight.w600) : null),
+                          subtitle: Text([if (t.artist.isNotEmpty) t.artist, if (t.album.isNotEmpty) t.album].join(' · '), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+                          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                            Text(fmtTime(Duration(milliseconds: t.durationMs)), style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.5))),
+                            PopupMenuButton<String>(
+                              onSelected: (v) async {
+                                if (v == 'play') await ref.read(playerProvider).open(list, i);
+                                if (v == 'queue') {
+                                  ref.read(playerProvider).enqueue([t]);
+                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Добавлено в очередь')));
+                                }
+                                if (v == 'playlist') _addToPlaylistDialog(t);
+                                if (v == 'remove') lib.removeTrack(t);
+                              },
+                              itemBuilder: (_) => const [
+                                PopupMenuItem(value: 'play', child: Text('Воспроизвести')),
+                                PopupMenuItem(value: 'queue', child: Text('В очередь')),
+                                PopupMenuItem(value: 'playlist', child: Text('В плейлист')),
+                                PopupMenuItem(value: 'remove', child: Text('Удалить')),
+                              ],
+                            ),
+                          ]),
+                          onTap: () => ref.read(playerProvider).open(list, i),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 

@@ -5,15 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:http/http.dart' as http;
-
 import 'app.dart';
 import 'models/models.dart';
 import 'services/launch_args.dart';
 import 'services/settings.dart';
-import 'services/vk_music/vk_music_api.dart';
-import 'services/vk_music/vk_token_storage.dart';
-import 'ui/pages/vk_music/vk_music_page.dart';
+
 
 String? _extractInitialPath(List<String> args) {
   for (final a in args) {
@@ -77,10 +73,6 @@ Future<void> main(List<String> args) async {
           return controller;
         }),
         sharedPrefsProvider.overrideWithValue(prefs),
-        vkMusicApiProvider.overrideWith((ref) {
-          final sp = ref.watch(sharedPrefsProvider);
-          return VkMusicApi(http.Client(), VkTokenStorage(sp));
-        }),
       ],
       child: const AuraApp(),
     ),
