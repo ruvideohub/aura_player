@@ -21,9 +21,9 @@ class VkAuthPage extends ConsumerStatefulWidget {
 class _VkAuthPageState extends ConsumerState<VkAuthPage> {
   bool _loading = true;
   String? _error;
-  late WebViewController _controller;
+  WebViewController? _controller;
   String? _authorizeUrl;
-  int _fallbackIndex = -1; // -1 = primary 6287487, 0.. = oauthFallbackIds
+  int _fallbackIndex = -1;
   String get _currentClientId => _fallbackIndex < 0 ? VkApi.oauthClientId : VkApi.oauthFallbackIds[_fallbackIndex];
 
   @override
@@ -35,13 +35,8 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
   Future<void> _loadWithClient(String clientId, SharedPreferences prefs, VkAccountManager mgr) async {
     final start = await mgr.startLogin(prefs: prefs, clientIdOverride: clientId);
     final finalUrl = start.authorizeUrl;
-    setState(() {
-      _authorizeUrl = finalUrl;
-      _loading = false;
-      _error = null;
-      _successFired = false;
-    });
-    _controller = WebViewController()
+    debugPrint('[VK_AUTH] authorizeUrl=$finalUrl clientId=$clientId');
+    final controller = WebViewController()
       ..setUserAgent('Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36 VKAndroidApp/8.12')
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(NavigationDelegate(
@@ -72,11 +67,18 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
         },
         onWebResourceError: (err) async {
           final u = err.url ?? '';
+          debugPrint('[VK_AUTH] onWebResourceError ${err.errorCode} ${err.description} url=$u');
           if (u.contains('access_token=')) await _handleRedirect(u, prefs);
         },
-      ))
-      ..loadRequest(Uri.parse(finalUrl));
-    setState(() {});
+      ));
+    _controller = controller;
+    setState(() {
+      _authorizeUrl = finalUrl;
+      _loading = false;
+      _error = null;
+      _successFired = false;
+    });
+    await controller.loadRequest(Uri.parse(finalUrl));
   }
 
   Future<void> _tryFallback(String reason) async {
@@ -94,7 +96,9 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
 
   Future<void> _checkPageForError() async {
     try {
-      final html = await _controller.runJavaScriptReturningResult('document.documentElement.innerText') as String?;
+      final c = _controller;
+      if (c == null) return;
+      final html = await c.runJavaScriptReturningResult('document.documentElement.innerText') as String?;
       final txt = html?.toString() ?? '';
       if (txt.contains('Unknown method') || txt.contains('Unknown method passed') || txt.contains('[3]')) {
         _tryFallback(txt.replaceAll('"', '').substring(0, 200));
@@ -195,12 +199,19 @@ class _VkAuthPageState extends ConsumerState<VkAuthPage> {
         ),
       );
     }
-    if (_authorizeUrl == null) {
+    if (_authorizeUrl == null || _controller == null) {
       return const Center(child: Text('Не удалось создать сессию'));
     }
     return Scaffold(
       appBar: AppBar(title: const Text('VK ID — вход')),
-      body: WebViewWidget(controller: _controller),
+      body: Column(children: [
+        if (_authorizeUrl != null)
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: SelectableText(_authorizeUrl!, style: const TextStyle(fontSize: 9, fontFamily: 'monospace')),
+          ),
+        Expanded(child: WebViewWidget(controller: _controller!)),
+      ]),
     );
   }
 }

@@ -39,9 +39,9 @@ class VkApi {
     '6287487',
   ];
 
-  static const oauthClientId = kateClientId;
-  static const oauthClientSecret = kateClientSecret;
-  static const oauthScope = 'all';
+  static const oauthClientId = '51858169';
+  static const oauthClientSecret = '';
+  static const oauthScope = 'video,friends,groups,wall';
   static const oauthScopeAudio = 'audio,offline';
 
   // Фоллбек client_id для токена через WebView
